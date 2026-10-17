@@ -1,0 +1,52 @@
+// -----------------------------------------------------------------------------
+// Integration configuration.
+//
+// The configuration is filled in by the user in Gladys, from the `config_schema`
+// declared in `gladys-assistant-integration.json`. The SDK fetches it for you
+// (`gladys.getConfig()`) and notifies you of every change through
+// `gladys.onConfigUpdated()`.
+//
+// This module only provides defaults and normalizes the received object, so the
+// rest of the code never has to deal with `undefined`.
+// -----------------------------------------------------------------------------
+
+// Defaults: they MUST stay consistent with the `default` values declared in the
+// `config_schema` of the manifest.
+export const DEFAULT_CONFIG = {
+  email: '',
+  password: '',
+  // S-PIN of the Volkswagen account: only needed to lock / unlock remotely.
+  spin: '',
+  // Seconds between two status reads of each car. Volkswagen rate-limits the
+  // accounts that read too often, hence the 3-minute floor. Gladys polls at
+  // most once a minute: slower intervals are applied by skipping polls (see
+  // createPollScheduler in src/devices/index.js).
+  poll_frequency: 300,
+};
+
+export const MIN_POLL_FREQUENCY = 180;
+export const MAX_POLL_FREQUENCY = 3600;
+
+/**
+ * Merge the user config with the defaults.
+ * @param {Record<string, unknown>} raw config returned by the SDK
+ */
+export function normalizeConfig(raw = {}) {
+  const pollFrequency = Number(raw.poll_frequency ?? DEFAULT_CONFIG.poll_frequency);
+  return {
+    ...DEFAULT_CONFIG,
+    ...raw,
+    // Force the types: config may arrive as strings from a form.
+    email: String(raw.email ?? '').trim(),
+    password: String(raw.password ?? ''),
+    spin: String(raw.spin ?? '').trim(),
+    poll_frequency: Number.isFinite(pollFrequency)
+      ? Math.min(MAX_POLL_FREQUENCY, Math.max(MIN_POLL_FREQUENCY, pollFrequency))
+      : DEFAULT_CONFIG.poll_frequency,
+  };
+}
+
+/** True once the account credentials are filled in. */
+export function hasCredentials(config) {
+  return Boolean(config.email && config.password);
+}

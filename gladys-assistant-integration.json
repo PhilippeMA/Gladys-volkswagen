@@ -1,0 +1,133 @@
+{
+  "manifest_version": 1,
+  "type": "device",
+  "name": "Volkswagen ID.",
+  "description": {
+    "en": "Battery, range, charging and climatisation of your Volkswagen ID. electric cars.",
+    "fr": "Batterie, autonomie, charge et climatisation de vos Volkswagen ID. électriques."
+  },
+  "version": "1.0.0",
+  "docker_image": "ghcr.io/philippema/gladys-volkswagen:1.0.0",
+  "gladys_version": ">=5.1.0",
+  "cover_image": "https://raw.githubusercontent.com/PhilippeMA/Gladys-volkswagen/main/cover.png",
+  "categories": ["energy", "services"],
+  "config_schema": [
+    {
+      "key": "intro",
+      "type": "section",
+      "label": { "en": "Your Volkswagen account", "fr": "Votre compte Volkswagen" },
+      "description": {
+        "en": "Use the account of the Volkswagen smartphone app, with your car already added to it. Gladys reads the car through the Volkswagen cloud: no box to install.",
+        "fr": "Utilisez le compte de l'application smartphone Volkswagen, votre voiture y étant déjà ajoutée. Gladys lit la voiture via le cloud Volkswagen : aucun boîtier à installer."
+      }
+    },
+    {
+      "key": "email",
+      "type": "string",
+      "label": { "en": "Email address", "fr": "Adresse e-mail" },
+      "placeholder": { "en": "e.g. me@example.com", "fr": "ex. moi@exemple.fr" },
+      "required": true
+    },
+    {
+      "key": "password",
+      "type": "secret",
+      "label": { "en": "Password", "fr": "Mot de passe" },
+      "required": true
+    },
+    {
+      "key": "spin",
+      "type": "secret",
+      "label": { "en": "S-PIN (optional)", "fr": "S-PIN (facultatif)" },
+      "description": {
+        "en": "The 4-digit security PIN of the account, only needed to lock and unlock the car.",
+        "fr": "Le code de sécurité à 4 chiffres du compte, nécessaire seulement pour verrouiller et déverrouiller la voiture."
+      },
+      "required": false
+    },
+    {
+      "key": "poll_frequency",
+      "type": "number",
+      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "description": {
+        "en": "How often each car is read, in seconds. Volkswagen limits the number of requests: three minutes minimum.",
+        "fr": "Fréquence de lecture de chaque voiture, en secondes. Volkswagen limite le nombre de requêtes : trois minutes minimum."
+      },
+      "required": false,
+      "default": 300,
+      "min": 180,
+      "max": 3600
+    }
+  ],
+  "actions": [
+    {
+      "key": "test_connection",
+      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
+      "timeout_seconds": 60
+    },
+    {
+      "key": "wake_up",
+      "label": { "en": "Wake up a car", "fr": "Réveiller une voiture" },
+      "timeout_seconds": 30,
+      "fields": [
+        {
+          "key": "device",
+          "type": "select",
+          "source": "devices",
+          "label": { "en": "Car", "fr": "Voiture" },
+          "required": true
+        }
+      ]
+    }
+  ],
+  "scene_triggers": [
+    {
+      "key": "charging_completed",
+      "label": { "en": "Charge completed", "fr": "Charge terminée" },
+      "description": {
+        "en": "A car stopped charging because its battery reached the charge limit.",
+        "fr": "Une voiture a fini de charger : sa batterie a atteint la limite de charge."
+      },
+      "fields": [
+        {
+          "key": "device",
+          "type": "select",
+          "source": "devices",
+          "label": { "en": "Car", "fr": "Voiture" }
+        }
+      ],
+      "variables": [
+        {
+          "key": "battery_level",
+          "type": "number",
+          "label": { "en": "Battery level (%)", "fr": "Niveau de batterie (%)" }
+        },
+        {
+          "key": "range",
+          "type": "number",
+          "label": { "en": "Range (km)", "fr": "Autonomie (km)" }
+        }
+      ]
+    }
+  ],
+  "widgets": [
+    {
+      "key": "vehicle_status",
+      "label": { "en": "Volkswagen ID.", "fr": "Volkswagen ID." },
+      "description": {
+        "en": "Battery, range, charge and climatisation of a car, with quick controls.",
+        "fr": "Batterie, autonomie, charge et climatisation d'une voiture, avec commandes rapides."
+      },
+      "icon": "battery-charging",
+      "settings": [
+        {
+          "key": "vehicle",
+          "type": "select",
+          "source": "devices",
+          "label": { "en": "Car", "fr": "Voiture" },
+          "required": false
+        }
+      ],
+      "action_timeout_seconds": 30
+    }
+  ]
+}
