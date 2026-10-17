@@ -1,31 +1,33 @@
 # Volkswagen ID. — Gladys Assistant integration
 
 External integration for [Gladys Assistant](https://gladysassistant.com) that
-brings the Volkswagen **ID.** electric cars (ID.3, ID.4, ID.5, ID.7, ID. Buzz…)
-into Gladys, through the Volkswagen cloud and the account of the Volkswagen
-smartphone app.
+brings the data of the Volkswagen **ID.** electric cars (ID.3, ID.4, ID.5,
+ID.7, ID. Buzz…) into Gladys, through Volkswagen's **EU Data Act portal** and
+the account of the Volkswagen smartphone app.
 
 Built from the official
 [JavaScript integration template](https://github.com/GladysAssistant/integration-template-js)
 with the SDK
 [`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js).
 
-- **Devices** — one per car: battery level, range, battery temperature,
-  charging (start/stop), charging power, cable plugged, charge limit,
-  remaining charging time, climatisation (start/stop) and its temperature,
-  outside temperature, odometer, doors/windows open, locks (with the S-PIN).
+- **Devices** — one per car, read-only: battery level, range, charging,
+  charging power, cable plugged, charge limit, remaining charging time,
+  outside temperature, odometer, doors/windows open, locks.
 - **Scene trigger** — `charging_completed`, when a charge reaches its limit.
-- **Dashboard widget** — `vehicle_status`, one car at a glance with quick
-  controls.
-- **Actions** — test the connection, wake a car up.
+- **Dashboard widget** — `vehicle_status`, one car at a glance.
+- **Action** — test the connection.
 
 User documentation: [English](docs/en.md) · [Français](docs/fr.md).
 
-> Volkswagen publishes no API for third parties. This integration speaks to
-> the same backend as the official app, as documented by the open-source
-> [WeConnect-python](https://github.com/tillsteinbach/WeConnect-python) /
-> [CarConnectivity](https://github.com/tillsteinbach/CarConnectivity-connector-volkswagen)
-> projects. All the endpoints, client ids and headers live in
+> **Read-only, by necessity.** Volkswagen retired the OAuth client of the ID.
+> app API on 2026-06-01: its sign-in now answers HTTP 403 to every
+> third-party client. The only data source left open is the
+> [EU Data Act portal](https://eu-data-act.drivesomethinggreater.com), which
+> stores a dataset of the car every 15 minutes and takes no command. The flow
+> follows the open-source
+> [ioBroker.vw-connect](https://github.com/TA2k/ioBroker.vw-connect) and
+> [evcc](https://github.com/evcc-io/evcc) clients, which made the same move.
+> All the endpoints, client ids and headers live in
 > [`src/vw/auth.js`](src/vw/auth.js) and [`src/vw/client.js`](src/vw/client.js),
 > so a change on Volkswagen's side is fixed in one place.
 
@@ -36,15 +38,16 @@ User documentation: [English](docs/en.md) · [Français](docs/fr.md).
 ├─ index.js                          # SDK wiring only (handlers, connection lifecycle)
 ├─ src/
 │  ├─ vw/
+│  │  ├─ transport.js                # node:https fetch-like transport (exact headers)
 │  │  ├─ http.js                     # cookie jar + manual-redirect web session
-│  │  ├─ auth.js                     # Volkswagen ID sign-in, token refresh
-│  │  ├─ tokenStore.js               # tokens persisted under /data
-│  │  ├─ client.js                   # CARIAD API: vehicles, status, commands
-│  │  └─ status.js                   # raw `selectivestatus` -> flat state
+│  │  ├─ auth.js                     # sign-in to the EU Data Act portal
+│  │  ├─ client.js                   # portal API: vehicles, data request, datasets
+│  │  ├─ zip.js                      # dataset archive reader
+│  │  └─ status.js                   # dataset data points -> flat state
 │  ├─ devices/
 │  │  ├─ vehicle.js                  # the vehicle device: features, states
 │  │  └─ index.js                    # scene trigger keys, poll scheduler
-│  ├─ vehicles.js                    # service: polls, commands, scene events
+│  ├─ vehicles.js                    # service: polls, dataset merge, scene events
 │  ├─ actions.js                     # manifest actions (Configuration screen)
 │  ├─ widgets.js                     # dashboard widget
 │  └─ config.js                      # config defaults + normalization
@@ -55,26 +58,25 @@ User documentation: [English](docs/en.md) · [Français](docs/fr.md).
 
 ## How it works
 
-1. **Sign-in** ([`src/vw/auth.js`](src/vw/auth.js)): the CARIAD backend hands
-   out an OpenID authorization URL; the identity provider
-   (`identity.vwgroup.io`) serves the login page — the legacy two-step
-   email/password form or the newer single form, both supported — and ends
-   on `weconnect://authenticated#…`; the OpenID tokens of that fragment are
-   swapped for the backend's own access/refresh tokens. Every redirect is
-   followed by hand with a cookie jar, without any dependency.
-2. **Session** ([`src/vw/client.js`](src/vw/client.js)): the access token is
-   refreshed before it expires, a 401 renews it once, a refused refresh token
-   falls back to a full sign-in. A refused sign-in is not retried for 15
-   minutes (Volkswagen locks accounts that fail too often). The tokens are
-   saved in `/data/vw-tokens.json` (mode 600, keyed by a hash of the email),
-   so a restart costs a refresh, not a sign-in.
-3. **Status**: Gladys polls each car once a minute; the service reads
-   `selectivestatus` at the configured interval only (5 min by default,
-   3 min minimum), asking only for the jobs the car has the capability for,
-   and publishes the changed values with `publishChangedStates`.
-4. **Commands**: a Gladys command calls the matching endpoint (`charging/start`,
-   `climatisation/settings`, `access/lock`…), publishes the requested value,
-   and brings the next read forward to confirm it.
+1. **One-time portal setup** (by the user, in a browser, see
+   [docs](docs/en.md)): link the car and enable a continuous data request,
+   every 15 minutes.
+2. **Sign-in** ([`src/vw/auth.js`](src/vw/auth.js)): the OpenID authorization
+   of the portal's own client on `identity.vwgroup.io` serves the email form,
+   then the password page; the redirects lead back to the portal, whose
+   callback sets the session cookies (`access_token`). The flow stops before
+   the portal's landing page, and skips the optional marketing consent through
+   its own callback. Every redirect is followed by hand with a cookie jar,
+   without any dependency.
+3. **Session** ([`src/vw/client.js`](src/vw/client.js)): the session is the
+   cookie jar, kept in memory. A 401/403 (or the portal's HTML error page)
+   signs in again once. A refused sign-in is not retried for 15 minutes
+   (Volkswagen locks accounts that fail too often).
+4. **Data**: Gladys polls each car once a minute; at the configured interval
+   (5 min by default, 3 min minimum) the service lists the car's datasets,
+   downloads the new ones (the 4 newest on the first read), merges their data
+   points — the newest wins, a parked car sends few — and publishes the
+   changed values with `publishChangedStates`.
 
 ## Run it locally
 
@@ -83,13 +85,12 @@ npm install
 GLADYS_HOST_API_URL="http://localhost:1443" \
 GLADYS_INTEGRATION_TOKEN="<token>" \
 GLADYS_INTEGRATION_SELECTOR="volkswagen" \
-DATA_DIR="./data" \
 LOG_LEVEL=debug \
 npm start
 ```
 
 The three `GLADYS_*` variables are injected by the Gladys supervisor in the
-container. `DATA_DIR` (default `/data`) is where the session tokens are kept.
+container. The integration writes nothing to disk.
 
 ## Quality checks
 
@@ -102,9 +103,9 @@ npx github:GladysAssistant/integration-store .   # store admission checks
 
 The tests run the real sign-in code against an in-memory Volkswagen
 ([`test/helpers/fakeVolkswagen.js`](test/helpers/fakeVolkswagen.js)) that
-serves both login pages, the token exchange, the refresh, the vehicle list,
-the status and the commands, and checks the cookies and the CSRF values on
-the way. The CI runs the three checks on Node 22 and 24 and builds the image.
+serves the identity pages, the portal callbacks, the vehicle list, the data
+request and the dataset archives, and checks the cookies and the CSRF values
+on the way. The CI runs the three checks on Node 22 and 24 and builds the image.
 
 ## Publish
 
@@ -122,4 +123,4 @@ the way. The CI runs the three checks on Node 22 and 24 and builds the image.
 
 ## License
 
-Apache-2.0. Not affiliated with, nor endorsed by, Volkswagen AG or CARIAD.
+Apache-2.0. Not affiliated with, nor endorsed by, Volkswagen AG.

@@ -5,7 +5,8 @@
 // It holds NO Volkswagen logic. It only:
 //   1. instantiates the SDK (connection, auth, reconnection: handled for you);
 //   2. registers the event handlers BEFORE connect();
-//   3. connects, signs in to the Volkswagen account and publishes the cars.
+//   3. connects, signs in to the Volkswagen EU Data Act portal and publishes
+//      the cars.
 //
 // Environment variables provided by the Gladys supervisor to the container:
 //   - GLADYS_HOST_API_URL         (host API URL)
@@ -18,19 +19,11 @@ import { GladysIntegration, logger } from '@gladysassistant/integration-sdk';
 import { normalizeConfig } from './src/config.js';
 import { createActions } from './src/actions.js';
 import { VehicleService } from './src/vehicles.js';
-import { VwClient } from './src/vw/client.js';
-import { createFileTokenStore } from './src/vw/tokenStore.js';
 import { WIDGETS, refreshWidgets } from './src/widgets.js';
 
 const gladys = new GladysIntegration();
 
-// One token file under /data, the only writable volume: a restart refreshes
-// the session instead of signing in again.
-const tokenStore = createFileTokenStore({ logger });
-const service = new VehicleService(gladys, {
-  createClient: (config) =>
-    new VwClient({ email: config.email, password: config.password, tokenStore }),
-});
+const service = new VehicleService(gladys);
 // Every status read can change the widget's computed rows.
 service.onStatus = () => refreshWidgets(gladys);
 
@@ -54,16 +47,12 @@ gladys.onScanRequest(async () => {
   await publishVehicles();
 });
 
-// --- Command: the user acts on a controllable feature ------------------------
-// Throwing sends a success:false acknowledgement: Gladys shows the failure.
-gladys.onSetValue(async (device, feature, value) => {
-  logger.info(`onSetValue <- ${feature.external_id} = ${value}`);
-  await service.setValue(device, feature, value);
-});
+// No onSetValue: every feature is read-only, the EU Data Act portal takes no
+// command (the SDK answers "not implemented" to a stray one).
 
 // --- Polling: Gladys asks to refresh a vehicle -------------------------------
-// Gladys polls every vehicle once a minute; the service only reads the car at
-// the interval the user chose in the configuration.
+// Gladys polls every vehicle once a minute; the service only checks the
+// portal at the interval the user chose in the configuration.
 gladys.onPoll(async (device) => {
   if (!(await service.poll(device))) {
     logger.debug(`onPoll skipped (not due) for ${device.external_id}`);
@@ -87,8 +76,8 @@ for (const [widgetKey, widget] of Object.entries(WIDGETS)) {
 gladys.onConfigUpdated(async (newConfig) => {
   logger.info('onConfigUpdated -> new configuration received');
   // New credentials start a new Volkswagen session; a new refresh interval
-  // or S-PIN applies from the next poll. Saving again after a failure
-  // retries the listing (the client still spaces out refused sign-ins).
+  // applies from the next poll. Saving again after a failure retries the
+  // listing (the client still spaces out refused sign-ins).
   const credentialsChanged = service.configure(normalizeConfig(newConfig));
   if (credentialsChanged || !service.vehiclesLoaded) {
     service.forgetConnectionStatus();
@@ -103,8 +92,8 @@ gladys.on('connected', async () => {
     service.configure(normalizeConfig(await gladys.getConfig()));
     // Report the account status again: Gladys may have restarted meanwhile.
     service.forgetConnectionStatus();
-    // The Volkswagen session survives reconnections (and restarts, through
-    // the token file): listing the cars costs one request, not a sign-in.
+    // The portal session survives reconnections to Gladys: listing the cars
+    // again costs one request, not a sign-in.
     await publishVehicles();
   } catch (err) {
     logger.error('Post-connection initialization failed', err);

@@ -12,24 +12,18 @@ the notes of the version's GitHub Release.
 
 ### Added
 
-- Sign-in with the account of the Volkswagen app (legacy and new login pages),
-  session kept across restarts.
-- One device per Volkswagen ID. car: battery level, range, battery
-  temperature, charging, charging power, cable plugged, charge limit,
-  remaining charging time, climatisation and its temperature, outside
-  temperature, odometer, doors and windows open, locks.
-- Commands: start/stop charging, charge limit, start/stop climatisation,
-  climatisation temperature, lock/unlock (with the S-PIN).
+- Sign-in to Volkswagen's EU Data Act portal with the account of the
+  Volkswagen app. Volkswagen retired the ID. app API on 2026-06-01, and the
+  portal is the only data source left open: read-only, a dataset every
+  15 minutes, enabled once in a browser (see the documentation).
+- One read-only device per Volkswagen ID. car: battery level, range,
+  charging, charging power, cable plugged, charge limit, remaining charging
+  time, outside temperature, odometer, doors and windows open, locks.
 - "Charge completed" scene trigger, with the battery level and the range.
 - "Volkswagen ID." dashboard widget.
-- "Test the connection" and "Wake up a car" actions.
-
-### Fixed
-
-- The sign-in failed with "Volkswagen authorization URL unavailable (HTTP
-  403)": the first calls to Volkswagen now carry the headers of the
-  Volkswagen app, and nothing else.
-- A failed sign-in or an unreachable Volkswagen now shows in the
-  Configuration screen, and saving the configuration again retries.
+- "Test the connection" action: signs in, lists the cars and checks that the
+  portal delivers data.
+- A failed sign-in, a missing portal setup or an unreachable Volkswagen shows
+  in the Configuration screen; saving the configuration again retries.
 
 [Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/commits/main

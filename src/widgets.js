@@ -3,10 +3,9 @@
 //
 // `vehicle_status`: one car at a glance. The battery and range tiles are
 // bound to the device features (live, they follow the published states); the
-// status list is computed from the last status read; the climatisation and
-// charging buttons are bound to the device features too, so a tap goes
-// through the same onSetValue path as the device card. The only widget
-// action is "Refresh": read the car now.
+// status list is computed from the last datasets read. The only widget
+// action is "Refresh": check the portal for new datasets now. There is no
+// control: the EU Data Act portal is read-only.
 //
 // Each entry of WIDGETS is keyed by the widget `key` and exposes:
 //   - get(gladys, { settings, language, units, service }): the content;
@@ -75,14 +74,6 @@ function statusItems(status) {
       color: status.plugged ? WIDGET_COLORS.SUCCESS : WIDGET_COLORS.NEUTRAL,
     });
   }
-  if (status.climatisationOn !== undefined) {
-    items.push({
-      label: text('Climatisation', 'Climatisation'),
-      icon: 'wind',
-      value: status.climatisationOn ? text('On', 'En marche') : text('Off', 'Arrêtée'),
-      color: status.climatisationOn ? WIDGET_COLORS.INFO : WIDGET_COLORS.NEUTRAL,
-    });
-  }
   if (status.locked !== undefined) {
     items.push({
       label: text('Doors', 'Portes'),
@@ -101,14 +92,6 @@ function statusItems(status) {
       color: WIDGET_COLORS.WARNING,
     });
   }
-  if (status.inspectionDueDays !== undefined) {
-    items.push({
-      label: text('Next service', 'Prochain entretien'),
-      icon: 'tool',
-      value: text(`In ${status.inspectionDueDays} days`, `Dans ${status.inspectionDueDays} jours`),
-      color: status.inspectionDueDays < 30 ? WIDGET_COLORS.WARNING : WIDGET_COLORS.NEUTRAL,
-    });
-  }
   return items;
 }
 
@@ -118,22 +101,6 @@ function featureOf(gladys, service, vehicle, key) {
     .discoveredDevices()
     .find((candidate) => candidate.external_id === vehicleIds(gladys, vehicle.vin).device);
   return device?.features.find((feature) => feature.external_id.endsWith(`:${key}`))?.external_id;
-}
-
-function toggleButton(featureId, on, labels) {
-  if (!featureId || on === undefined) {
-    return [];
-  }
-  return [
-    {
-      type: 'button',
-      label: on ? labels.stop : labels.start,
-      icon: labels.icon,
-      style: on ? 'secondary' : 'primary',
-      device_feature: featureId,
-      value: on ? 0 : 1,
-    },
-  ];
 }
 
 /** The car a widget instance shows: the chosen one, else the first. */
@@ -192,21 +159,18 @@ export const WIDGETS = {
                 },
               ]
             : []),
-          ...(items.length > 0 ? [{ type: 'status', items }] : []),
-          ...toggleButton(
-            featureOf(gladys, service, vehicle, 'climatisation'),
-            status.climatisationOn,
-            {
-              start: text('Start A/C', 'Climatiser'),
-              stop: text('Stop A/C', 'Arrêter clim'),
-              icon: 'wind',
-            },
-          ),
-          ...toggleButton(featureOf(gladys, service, vehicle, 'charging'), status.charging, {
-            start: text('Start charge', 'Lancer charge'),
-            stop: text('Stop charge', 'Arrêter charge'),
-            icon: 'battery-charging',
-          }),
+          ...(items.length > 0
+            ? [{ type: 'status', items }]
+            : [
+                {
+                  type: 'text',
+                  variant: 'caption',
+                  text: text(
+                    'Waiting for the first dataset from Volkswagen.',
+                    'En attente des premières données Volkswagen.',
+                  ),
+                },
+              ]),
           {
             type: 'button',
             label: text('Refresh', 'Actualiser'),
@@ -226,7 +190,7 @@ export const WIDGETS = {
           throw new Error('Unknown vehicle');
         }
         await service.refreshStatus(vehicle);
-        return text('Vehicle status refreshed.', 'État du véhicule actualisé.');
+        return text('Vehicle data refreshed.', 'Données du véhicule actualisées.');
       }
       // Throwing acks the action as failed: the message reaches the user.
       throw new Error(`Unknown widget action: ${actionKey}`);

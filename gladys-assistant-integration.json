@@ -3,8 +3,8 @@
   "type": "device",
   "name": "Volkswagen ID.",
   "description": {
-    "en": "Battery, range, charging and climatisation of your Volkswagen ID. electric cars.",
-    "fr": "Batterie, autonomie, charge et climatisation de vos Volkswagen ID. électriques."
+    "en": "Battery, range and charging of your Volkswagen ID. cars, via the EU Data Act portal.",
+    "fr": "Batterie, autonomie et charge de vos Volkswagen ID., via le portail EU Data Act."
   },
   "version": "1.0.0",
   "docker_image": "ghcr.io/philippema/gladys-volkswagen:1.0.0",
@@ -15,42 +15,56 @@
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Your Volkswagen account", "fr": "Votre compte Volkswagen" },
+      "label": {
+        "en": "Before you start: the Volkswagen EU Data Act portal",
+        "fr": "Avant de commencer : le portail EU Data Act de Volkswagen"
+      },
       "description": {
-        "en": "Use the account of the Volkswagen smartphone app, with your car already added to it. Gladys reads the car through the Volkswagen cloud: no box to install.",
-        "fr": "Utilisez le compte de l'application smartphone Volkswagen, votre voiture y étant déjà ajoutée. Gladys lit la voiture via le cloud Volkswagen : aucun boîtier à installer."
-      }
+        "en": "Volkswagen only shares the car's data through its EU Data Act portal, read-only, every 15 minutes. Once, in a browser: sign in to the portal with the account of the Volkswagen app, link your car, then request customised data with all data clusters, every 15 minutes, with no end date. Then enter the same email and password below.",
+        "fr": "Volkswagen ne partage les données de la voiture que via son portail EU Data Act, en lecture seule, toutes les 15 minutes. Une fois, dans un navigateur : connectez-vous au portail avec le compte de l'application Volkswagen, liez votre voiture, puis demandez des données personnalisées avec tous les clusters de données, toutes les 15 minutes, sans date de fin. Saisissez ensuite les mêmes e-mail et mot de passe ci-dessous."
+      },
+      "links": [
+        {
+          "url": "https://eu-data-act.drivesomethinggreater.com/",
+          "label": {
+            "en": "Volkswagen EU Data Act portal",
+            "fr": "Portail EU Data Act de Volkswagen"
+          }
+        }
+      ]
     },
     {
       "key": "email",
       "type": "string",
-      "label": { "en": "Email address", "fr": "Adresse e-mail" },
-      "placeholder": { "en": "e.g. me@example.com", "fr": "ex. moi@exemple.fr" },
+      "label": {
+        "en": "Email address",
+        "fr": "Adresse e-mail"
+      },
+      "placeholder": {
+        "en": "e.g. me@example.com",
+        "fr": "ex. moi@exemple.fr"
+      },
       "required": true
     },
     {
       "key": "password",
       "type": "secret",
-      "label": { "en": "Password", "fr": "Mot de passe" },
-      "required": true
-    },
-    {
-      "key": "spin",
-      "type": "secret",
-      "label": { "en": "S-PIN (optional)", "fr": "S-PIN (facultatif)" },
-      "description": {
-        "en": "The 4-digit security PIN of the account, only needed to lock and unlock the car.",
-        "fr": "Le code de sécurité à 4 chiffres du compte, nécessaire seulement pour verrouiller et déverrouiller la voiture."
+      "label": {
+        "en": "Password",
+        "fr": "Mot de passe"
       },
-      "required": false
+      "required": true
     },
     {
       "key": "poll_frequency",
       "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "label": {
+        "en": "Refresh interval (s)",
+        "fr": "Intervalle de rafraîchissement (s)"
+      },
       "description": {
-        "en": "How often each car is read, in seconds. Volkswagen limits the number of requests: three minutes minimum.",
-        "fr": "Fréquence de lecture de chaque voiture, en secondes. Volkswagen limite le nombre de requêtes : trois minutes minimum."
+        "en": "How often each car's new data is checked, in seconds. Volkswagen publishes it every 15 minutes: three minutes minimum.",
+        "fr": "Fréquence de vérification des nouvelles données de chaque voiture, en secondes. Volkswagen les publie toutes les 15 minutes : trois minutes minimum."
       },
       "required": false,
       "default": 300,
@@ -61,28 +75,20 @@
   "actions": [
     {
       "key": "test_connection",
-      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
-      "timeout_seconds": 60
-    },
-    {
-      "key": "wake_up",
-      "label": { "en": "Wake up a car", "fr": "Réveiller une voiture" },
-      "timeout_seconds": 30,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Car", "fr": "Voiture" },
-          "required": true
-        }
-      ]
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
+      },
+      "timeout_seconds": 120
     }
   ],
   "scene_triggers": [
     {
       "key": "charging_completed",
-      "label": { "en": "Charge completed", "fr": "Charge terminée" },
+      "label": {
+        "en": "Charge completed",
+        "fr": "Charge terminée"
+      },
       "description": {
         "en": "A car stopped charging because its battery reached the charge limit.",
         "fr": "Une voiture a fini de charger : sa batterie a atteint la limite de charge."
@@ -92,19 +98,28 @@
           "key": "device",
           "type": "select",
           "source": "devices",
-          "label": { "en": "Car", "fr": "Voiture" }
+          "label": {
+            "en": "Car",
+            "fr": "Voiture"
+          }
         }
       ],
       "variables": [
         {
           "key": "battery_level",
           "type": "number",
-          "label": { "en": "Battery level (%)", "fr": "Niveau de batterie (%)" }
+          "label": {
+            "en": "Battery level (%)",
+            "fr": "Niveau de batterie (%)"
+          }
         },
         {
           "key": "range",
           "type": "number",
-          "label": { "en": "Range (km)", "fr": "Autonomie (km)" }
+          "label": {
+            "en": "Range (km)",
+            "fr": "Autonomie (km)"
+          }
         }
       ]
     }
@@ -112,10 +127,13 @@
   "widgets": [
     {
       "key": "vehicle_status",
-      "label": { "en": "Volkswagen ID.", "fr": "Volkswagen ID." },
+      "label": {
+        "en": "Volkswagen ID.",
+        "fr": "Volkswagen ID."
+      },
       "description": {
-        "en": "Battery, range, charge and climatisation of a car, with quick controls.",
-        "fr": "Batterie, autonomie, charge et climatisation d'une voiture, avec commandes rapides."
+        "en": "Battery, range, charge, cable and locks of a car, at a glance.",
+        "fr": "Batterie, autonomie, charge, câble et verrouillage d'une voiture, d'un coup d'œil."
       },
       "icon": "battery-charging",
       "settings": [
@@ -123,7 +141,10 @@
           "key": "vehicle",
           "type": "select",
           "source": "devices",
-          "label": { "en": "Car", "fr": "Voiture" },
+          "label": {
+            "en": "Car",
+            "fr": "Voiture"
+          },
           "required": false
         }
       ],

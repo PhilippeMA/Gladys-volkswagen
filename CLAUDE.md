@@ -11,9 +11,11 @@ Gladys through
 [`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js),
 its only runtime dependency. It started from the official JavaScript template.
 
-It connects the Volkswagen ID. electric cars through the Volkswagen (CARIAD)
-cloud, with the account of the Volkswagen app. There is no official API: the
-endpoints follow the open-source WeConnect / CarConnectivity projects.
+It reads the Volkswagen ID. electric cars through Volkswagen's EU Data Act
+portal (read-only datasets every 15 minutes), with the account of the
+Volkswagen app. The app API (OAuth client `a24fba63-…`) was retired by
+Volkswagen on 2026-06-01: do not bring it back. The portal flow follows the
+open-source ioBroker.vw-connect and evcc clients.
 
 ## Commands
 
@@ -36,11 +38,11 @@ pushing.
 
 ```
 index.js                          SDK wiring only: handlers registered before connect()
-src/vw/                           Volkswagen client: http (cookies), auth (sign-in, refresh),
-                                  tokenStore (/data), client (API calls), status (normalization)
+src/vw/                           portal client: transport (https), http (cookies), auth (sign-in),
+                                  client (API calls), zip (datasets), status (normalization)
 src/devices/vehicle.js            the vehicle device: FEATURES table, discovery payload, states
 src/devices/index.js              scene trigger keys + poll scheduler
-src/vehicles.js                   service: vehicles, polls, commands, scene events, connection status
+src/vehicles.js                   service: vehicles, polls, dataset merge, scene events, connection status
 src/actions.js                    manifest `actions` handlers
 src/widgets.js                    dashboard widget handlers (manifest `widgets`)
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
@@ -78,9 +80,9 @@ test/                             node --test, SDK fake Gladys + test/helpers/fa
   together.
 - **User-facing text** is bilingual (English and French): action messages,
   manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
-- **Volkswagen rate limits.** Never read a car more often than the configured
-  interval (3 minutes minimum), never retry a refused sign-in in a loop (the
-  client waits 15 minutes), and keep every URL, client id and header in
-  `src/vw/auth.js` / `src/vw/client.js`.
+- **Volkswagen limits.** Never check a car more often than the configured
+  interval (3 minutes minimum), download a dataset only once, never retry a
+  refused sign-in in a loop (the client waits 15 minutes), and keep every
+  URL, client id and header in `src/vw/auth.js` / `src/vw/client.js`.
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
   in English. Tests never touch the network.

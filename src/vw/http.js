@@ -1,18 +1,18 @@
 // -----------------------------------------------------------------------------
-// Minimal HTTP helpers for the Volkswagen sign-in: a cookie jar and a fetch
-// wrapper that never follows redirects by itself.
+// Minimal HTTP helpers for the Volkswagen portal: a cookie jar and a session
+// that never follows redirects by itself.
 //
-// The identity provider (identity.vwgroup.io) is a browser flow: it sets
-// session cookies on every hop and ends on a `weconnect://` custom-scheme
-// redirect that no HTTP client can follow. So every redirect is followed by
-// hand, the cookies carried from hop to hop.
+// The sign-in is a browser flow across identity.vwgroup.io and the EU Data
+// Act portal: each hop sets cookies, and the portal session is the cookies
+// themselves. So every redirect is followed by hand, the cookies carried from
+// hop to hop, and the flow can stop before the portal's heavy landing page.
 // -----------------------------------------------------------------------------
 
 import { httpsFetch } from './transport.js';
 
 /**
- * A deliberately small cookie jar: name/value per domain, no path or expiry
- * handling (the sign-in lasts a few seconds and is thrown away afterwards).
+ * A deliberately small cookie jar: name/value per domain, no path handling
+ * (both sites scope their cookies to `/`).
  */
 export class CookieJar {
   constructor() {
@@ -37,7 +37,7 @@ export class CookieJar {
       const value = pair.slice(separator + 1).trim();
       let domain = host;
       let hostOnly = true;
-      let expired = false;
+      let expired = value === '';
       for (const attribute of attributes) {
         const [key, ...rest] = attribute.split('=');
         const attrName = key.trim().toLowerCase();
@@ -58,42 +58,28 @@ export class CookieJar {
     }
   }
 
+  #matching(url) {
+    const host = new URL(url).hostname;
+    return [...this.cookies.values()].filter(({ domain, hostOnly }) =>
+      hostOnly ? host === domain : host === domain || host.endsWith(`.${domain}`),
+    );
+  }
+
   /** The `Cookie` header to send to `url`, or undefined when none applies. */
   header(url) {
-    const host = new URL(url).hostname;
-    const pairs = [];
-    for (const { domain, name, value, hostOnly } of this.cookies.values()) {
-      const matches = hostOnly ? host === domain : host === domain || host.endsWith(`.${domain}`);
-      if (matches) {
-        pairs.push(`${name}=${value}`);
-      }
-    }
+    const pairs = this.#matching(url).map(({ name, value }) => `${name}=${value}`);
     return pairs.length > 0 ? pairs.join('; ') : undefined;
   }
-}
 
-/** True for the custom-scheme URL the sign-in ends on (never fetchable). */
-export function isAppRedirect(url) {
-  return typeof url === 'string' && url.startsWith('weconnect://');
-}
-
-/**
- * Resolve a `Location` header against the URL that answered it. The custom
- * scheme is kept as is (`new URL` would mangle nothing, but stay explicit).
- */
-export function resolveLocation(location, base) {
-  if (isAppRedirect(location)) {
-    return location;
+  /** Value of the cookie `name` sent to `url`, or undefined. */
+  value(name, url) {
+    return this.#matching(url).find((cookie) => cookie.name === name)?.value;
   }
-  return new URL(location, base).toString();
 }
 
-/**
- * A browser-like session: one cookie jar, manual redirects, the default
- * headers of the Volkswagen Android app web view.
- */
+/** A cookie-carrying session with manual redirects. */
 export class WebSession {
-  constructor({ fetch: fetchImpl = httpsFetch, headers = {}, timeoutMs = 30_000 } = {}) {
+  constructor({ fetch: fetchImpl = httpsFetch, headers = {}, timeoutMs = 60_000 } = {}) {
     this.fetch = fetchImpl;
     this.jar = new CookieJar();
     this.headers = headers;
@@ -101,12 +87,11 @@ export class WebSession {
   }
 
   /**
-   * One request, never following redirects. `form` is sent url-encoded,
-   * `json` as JSON; `plain` drops the session's default headers. Resolves the raw Response (status, headers, body).
+   * One request, never following redirects. `form` is sent url-encoded.
+   * Resolves the raw response (`status`, `headers`, `text()`...).
    */
-  async request(method, url, { form, json, headers = {}, plain = false } = {}) {
-    // `plain`: send only the given headers, not the web view defaults.
-    const finalHeaders = { ...(plain ? {} : this.headers), ...headers };
+  async request(method, url, { form, headers = {} } = {}) {
+    const finalHeaders = { ...this.headers, ...headers };
     const cookie = this.jar.header(url);
     if (cookie) {
       finalHeaders.cookie = cookie;
@@ -115,9 +100,6 @@ export class WebSession {
     if (form !== undefined) {
       body = new URLSearchParams(form).toString();
       finalHeaders['content-type'] = 'application/x-www-form-urlencoded';
-    } else if (json !== undefined) {
-      body = JSON.stringify(json);
-      finalHeaders['content-type'] = 'application/json';
     }
     const response = await this.fetch(url, {
       method,
@@ -131,20 +113,16 @@ export class WebSession {
   }
 
   /**
-   * Follow the redirects from `url` by hand, until a page answers (2xx) or
-   * the sign-in hands over to the app (`weconnect://`). Resolves
-   * `{ url, response }`, `response` being undefined in the app case.
+   * Follow the redirects from `first` (the response `url` answered) by hand,
+   * with GET requests, until a page answers (non-3xx) or `stopBefore(next)`
+   * returns true for the next URL — which is then not requested. Resolves
+   * `{ url, response, stoppedAt }`: the last URL requested, its response,
+   * and the URL the flow stopped before (undefined if it did not stop).
    */
-  async follow(url, { maxRedirects = 15, first } = {}) {
+  async follow(url, first, { stopBefore = () => false, rewrite = (next) => next } = {}) {
     let current = url;
     let response = first;
-    for (let hop = 0; hop <= maxRedirects; hop += 1) {
-      if (isAppRedirect(current)) {
-        return { url: current, response: undefined };
-      }
-      if (!response) {
-        response = await this.request('GET', current);
-      }
+    for (let hop = 0; hop < 20; hop += 1) {
       if (response.status < 300 || response.status >= 400) {
         return { url: current, response };
       }
@@ -152,8 +130,12 @@ export class WebSession {
       if (!location) {
         throw new Error(`Redirect without Location (${response.status}) from ${hostOf(current)}`);
       }
-      current = resolveLocation(location, current);
-      response = undefined;
+      const next = rewrite(new URL(location, current).toString());
+      if (stopBefore(next)) {
+        return { url: current, response, stoppedAt: next };
+      }
+      current = next;
+      response = await this.request('GET', current, { headers: { referer: url } });
     }
     throw new Error('Too many redirects during the Volkswagen sign-in');
   }

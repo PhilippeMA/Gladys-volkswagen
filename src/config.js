@@ -15,10 +15,8 @@
 export const DEFAULT_CONFIG = {
   email: '',
   password: '',
-  // S-PIN of the Volkswagen account: only needed to lock / unlock remotely.
-  spin: '',
-  // Seconds between two status reads of each car. Volkswagen rate-limits the
-  // accounts that read too often, hence the 3-minute floor. Gladys polls at
+  // Seconds between two checks of each car's datasets. The portal stores one
+  // every 15 minutes: checking more often than every 3 minutes only loads it. Gladys polls at
   // most once a minute: slower intervals are applied by skipping polls (see
   // createPollScheduler in src/devices/index.js).
   poll_frequency: 300,
@@ -39,7 +37,6 @@ export function normalizeConfig(raw = {}) {
     // Force the types: config may arrive as strings from a form.
     email: String(raw.email ?? '').trim(),
     password: String(raw.password ?? ''),
-    spin: String(raw.spin ?? '').trim(),
     poll_frequency: Number.isFinite(pollFrequency)
       ? Math.min(MAX_POLL_FREQUENCY, Math.max(MIN_POLL_FREQUENCY, pollFrequency))
       : DEFAULT_CONFIG.poll_frequency,

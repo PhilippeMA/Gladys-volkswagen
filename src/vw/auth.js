@@ -1,78 +1,50 @@
 // -----------------------------------------------------------------------------
-// Volkswagen ID sign-in (the account of the "Volkswagen" smartphone app).
+// Sign-in to the Volkswagen EU Data Act portal.
 //
-// Volkswagen publishes no API for third parties: this is the flow the official
-// Android app runs, as documented by the open-source WeConnect / CarConnectivity
-// projects. In short:
-//   1. the CARIAD backend hands out an OpenID authorization URL;
-//   2. the identity provider (identity.vwgroup.io) serves a login page — the
-//      legacy two-step email/password form, or the newer single form — and,
-//      once signed in, redirects to `weconnect://authenticated#...` with the
-//      OpenID tokens in the fragment;
-//   3. the CARIAD backend swaps them for its own access/refresh tokens.
-// Refreshing then goes straight to the CARIAD token endpoint.
+// Volkswagen retired the OAuth client of the ID. app API on 2026-06-01 (its
+// sign-in now answers HTTP 403). What remains open to third parties is the
+// portal Volkswagen runs for the EU Data Act
+// (https://eu-data-act.drivesomethinggreater.com): read-only datasets of the
+// car, delivered every 15 minutes, with the same account as the Volkswagen
+// app. This flow follows the open-source ioBroker.vw-connect and evcc
+// clients:
+//   1. the OpenID authorization of the portal's own client on
+//      identity.vwgroup.io serves the email form, then the password page;
+//   2. after the password, the redirects go back to the portal, whose
+//      callback sets the session cookies (`access_token` among them);
+//   3. the flow stops before the portal's landing page, which is not needed.
+// The session IS the cookie jar: the API calls carry its cookies.
 //
-// Every URL, client id and header lives here, so a change on Volkswagen's
-// side is fixed in one place.
+// Every URL, client id and header lives here and in src/vw/client.js, so a
+// change on Volkswagen's side is fixed in one place.
 // -----------------------------------------------------------------------------
 
-import { randomBytes, randomUUID } from 'node:crypto';
-import { WebSession, hostOf, isAppRedirect, resolveLocation } from './http.js';
+import { randomBytes } from 'node:crypto';
+import { WebSession, hostOf } from './http.js';
 import { httpsFetch } from './transport.js';
 
-export const CLIENT_ID = 'a24fba63-34b3-4d43-b181-942111e6bda8@apps_vw-dilab_com';
-export const REDIRECT_URI = 'weconnect://authenticated';
-export const BFF_URL = 'https://emea.bff.cariad.digital';
+export const PORTAL_URL = 'https://eu-data-act.drivesomethinggreater.com';
 export const IDENTITY_URL = 'https://identity.vwgroup.io';
 
-const AUTHORIZE_URL = `${BFF_URL}/user-login/v1/authorize`;
-const LOGIN_TOKEN_URL = `${BFF_URL}/user-login/login/v1`;
-const REFRESH_TOKEN_URL = `${BFF_URL}/login/v1/idk/token`;
+// OpenID client of the portal for Volkswagen passenger cars (the ID. range).
+export const CLIENT_ID = '9b58543e-1c15-4193-91d5-8a14145bebb0@apps_vw-dilab_com';
+const BRAND = 'VOLKSWAGEN_PASSENGER_CARS';
+const AUTHORIZE_URL = `${IDENTITY_URL}/oidc/v1/authorize`;
+const REDIRECT_URI = `${PORTAL_URL}/login`;
+const SCOPE = 'openid cars profile';
 
-export const APP_USER_AGENT = 'Volkswagen/3.51.1-android/14';
-const APP_PACKAGE = 'com.volkswagen.weconnect';
+export const USER_AGENT = 'Gladys-Volkswagen (+https://github.com/PhilippeMA/Gladys-volkswagen)';
 
-// Headers of the app's calls to the CARIAD backend (the reference clients send
-// exactly these). The backend's front door answers 403 to requests that do
-// not carry them — browser-like headers included.
-export const BFF_HEADERS = {
-  accept: '*/*',
-  'content-type': 'application/json',
-  'content-version': '1',
-  'x-newrelic-id': 'VgAEWV9QDRAEXFlRAAYPUA==',
-  'user-agent': APP_USER_AGENT,
-  'accept-language': 'de-de',
-  'cache-control': 'no-cache',
-  pragma: 'no-cache',
-  'x-android-package-name': APP_PACKAGE,
-};
-
-/** Fresh `weconnect-trace-id`, sent by the app with every backend call. */
-export function traceId() {
-  return randomUUID().toUpperCase();
-}
-
-// Headers of the app's web view, for the identity provider pages.
 const WEB_HEADERS = {
-  'user-agent': APP_USER_AGENT,
-  accept:
-    'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3',
+  'user-agent': USER_AGENT,
+  accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'accept-language': 'en-US,en;q=0.9',
-  'x-requested-with': APP_PACKAGE,
-  'x-android-package-name': APP_PACKAGE,
-  'upgrade-insecure-requests': '1',
 };
-
-// Refresh a little before the expiry, so a request never leaves with a token
-// that dies on its way.
-const EXPIRY_MARGIN_MS = 60_000;
-// When neither the response nor the JWT says how long a token lives.
-const DEFAULT_TOKEN_LIFETIME_S = 3600;
 
 /**
- * The account cannot sign in: wrong credentials, terms to accept, locked
- * account... Retrying will not help until the user acts, unlike a network
- * failure. `userMessage` is the multi-language text shown in Gladys.
+ * The account cannot sign in: wrong credentials, portal consent missing,
+ * locked account... Retrying will not help until the user acts, unlike a
+ * network failure. `userMessage` is the multi-language text shown in Gladys.
  */
 export class VwAuthError extends Error {
   constructor(message, userMessage) {
@@ -85,27 +57,28 @@ export class VwAuthError extends Error {
   }
 }
 
-const BAD_CREDENTIALS = {
-  en: 'Volkswagen sign-in refused: check the email address and the password.',
-  fr: 'Connexion Volkswagen refusée : vérifiez l’adresse e-mail et le mot de passe.',
+export const MESSAGES = {
+  missingCredentials: {
+    en: 'Enter the email address and the password of your Volkswagen account.',
+    fr: 'Renseignez l’adresse e-mail et le mot de passe de votre compte Volkswagen.',
+  },
+  badCredentials: {
+    en: 'Volkswagen sign-in refused: check the email address and the password.',
+    fr: 'Connexion Volkswagen refusée : vérifiez l’adresse e-mail et le mot de passe.',
+  },
+  portalConsent: {
+    en: 'Sign in once to the Volkswagen EU Data Act portal in a browser and accept its terms (see the documentation).',
+    fr: 'Connectez-vous une fois au portail EU Data Act de Volkswagen dans un navigateur et acceptez ses conditions (voir la documentation).',
+  },
+  throttled: {
+    en: 'Too many sign-in attempts: Volkswagen blocks the account for a while.',
+    fr: 'Trop de tentatives de connexion : Volkswagen bloque le compte pour un moment.',
+  },
+  locked: {
+    en: 'The Volkswagen account is locked or disabled.',
+    fr: 'Le compte Volkswagen est verrouillé ou désactivé.',
+  },
 };
-const TERMS_TO_ACCEPT = {
-  en: 'Volkswagen asks you to accept new terms: open the Volkswagen app, sign in and accept them.',
-  fr: 'Volkswagen demande d’accepter de nouvelles conditions : ouvrez l’application Volkswagen, connectez-vous et acceptez-les.',
-};
-const THROTTLED = {
-  en: 'Too many sign-in attempts: Volkswagen blocks the account for a few minutes.',
-  fr: 'Trop de tentatives de connexion : Volkswagen bloque le compte quelques minutes.',
-};
-
-/**
- * "HTTP 403, server AkamaiGHost": enough to tell a refused request from a
- * Volkswagen outage in the logs, without logging any body or token.
- */
-export function describeFailure(response) {
-  const server = response.headers.get('server');
-  return `HTTP ${response.status}${server ? `, server ${server}` : ''}`;
-}
 
 // --- HTML parsing (no dependency: the pages are small and stable enough) -----
 
@@ -136,14 +109,13 @@ function attribute(tag, name) {
 }
 
 /**
- * The `action` and the `<input>` values of the form whose id is `formId`,
- * or undefined when the page has no such form.
+ * The `action` and the `<input>` values of the form whose id is `formId`
+ * (the first form when `formId` is omitted), or undefined.
  */
 export function parseForm(html, formId) {
-  const forms = html.matchAll(/<form\b[^>]*>[\s\S]*?<\/form>/gi);
-  for (const [formHtml] of forms) {
+  for (const [formHtml] of html.matchAll(/<form\b[^>]*>[\s\S]*?<\/form>/gi)) {
     const openTag = formHtml.match(/<form\b[^>]*>/i)[0];
-    if (attribute(openTag, 'id') !== formId) {
+    if (formId !== undefined && attribute(openTag, 'id') !== formId) {
       continue;
     }
     const data = {};
@@ -159,269 +131,210 @@ export function parseForm(html, formId) {
 }
 
 /**
- * The legacy password page carries its form as a script object:
- * `templateModel: {...},` plus `csrf_token: '...'`.
+ * The identity pages carry their form state in a script object,
+ * `templateModel: {...}`, plus `csrf_token: '...'`. The object is read by
+ * brace matching: it holds nested objects.
  */
 export function parseTemplateModel(html) {
-  const match = html.match(/templateModel:\s*(\{.*?\}),\s*\n/);
-  if (!match) {
+  const index = html.indexOf('templateModel');
+  const start = index < 0 ? -1 : html.indexOf('{', index);
+  if (start < 0) {
     return undefined;
   }
-  const model = JSON.parse(match[1]);
-  const csrf = html.match(/csrf_token:\s*'([^']*)'/);
-  return { model, csrf: csrf ? csrf[1] : undefined };
-}
-
-/** `state` hidden input of the newer single-form login page. */
-export function parseLoginState(html) {
-  for (const [input] of html.matchAll(/<input\b[^>]*>/gi)) {
-    if (attribute(input, 'name') === 'state') {
-      return attribute(input, 'value');
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < html.length; i += 1) {
+    const char = html[i];
+    if (inString) {
+      if (char === '\\') i += 1;
+      else if (char === '"') inString = false;
+    } else if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const model = JSON.parse(html.slice(start, i + 1));
+          const csrf = html.match(/csrf_token\s*[:=]\s*['"]([^'"]+)['"]/);
+          return { model, csrf: csrf ? csrf[1] : undefined };
+        } catch {
+          return undefined;
+        }
+      }
     }
   }
   return undefined;
 }
 
-/** The parameters of the `weconnect://authenticated#a=b&c=d` fragment. */
-export function parseAppRedirect(url) {
-  const hashIndex = url.indexOf('#');
-  const queryIndex = url.indexOf('?');
-  const index = hashIndex >= 0 ? hashIndex : queryIndex;
-  return Object.fromEntries(new URLSearchParams(index >= 0 ? url.slice(index + 1) : ''));
-}
+// --- Landing pages ------------------------------------------------------------
 
-// --- Tokens -------------------------------------------------------------------
-
-/** Expiry (ms since epoch) of a JWT, from its `exp` claim, or undefined. */
-export function jwtExpiry(token) {
-  try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
-    return typeof payload.exp === 'number' ? payload.exp * 1000 : undefined;
-  } catch {
-    return undefined;
-  }
+/** The portal page the sign-in ends on (`/<country>/<language>/user.html`). */
+export function isPortalLandingPage(url) {
+  const target = new URL(url);
+  return (
+    target.origin === PORTAL_URL &&
+    /^\/(?:content\/euda\/)?[a-z]{2}\/[a-z]{2}\/user\.html$/.test(target.pathname)
+  );
 }
 
 /**
- * Normalize a token response of the CARIAD backend: it answers camelCase on
- * login (`accessToken`) and snake_case on refresh (`access_token`).
+ * Volkswagen sometimes shows an OPTIONAL marketing-consent page after a
+ * successful sign-in. Its URL embeds the callback that completes the sign-in
+ * without consenting: resolve it, or undefined for any other URL. Only a
+ * callback on the identity provider itself is accepted.
  */
-export function normalizeTokens(body, previous = {}, now = Date.now()) {
-  const accessToken = body.accessToken ?? body.access_token;
-  if (!accessToken) {
-    throw new Error('The Volkswagen token response carries no access token');
+export function marketingConsentCallback(url) {
+  const page = new URL(url);
+  if (page.origin !== IDENTITY_URL || !/\/consent\/marketing\//i.test(page.pathname)) {
+    return undefined;
   }
-  const refreshToken = body.refreshToken ?? body.refresh_token ?? previous.refreshToken;
-  const idToken = body.idToken ?? body.id_token ?? previous.idToken;
-  const expiresIn = Number(body.expiresIn ?? body.expires_in);
-  const expiresAt = Number.isFinite(expiresIn)
-    ? now + expiresIn * 1000
-    : (jwtExpiry(accessToken) ?? now + DEFAULT_TOKEN_LIFETIME_S * 1000);
-  return { accessToken, refreshToken, idToken, expiresAt };
+  const callback = page.searchParams.get('callback');
+  if (!callback || !URL.canParse(callback)) {
+    return undefined;
+  }
+  const target = new URL(callback);
+  const validPath =
+    target.pathname === '/oidc/v1/oauth/client/callback' ||
+    target.pathname === '/oidc/v1/oauth/client/callback/success';
+  if (target.origin !== IDENTITY_URL || !validPath) {
+    return undefined;
+  }
+  target.search = target.searchParams.toString();
+  return target.toString();
 }
 
-export function isFresh(tokens, now = Date.now()) {
-  return Boolean(tokens?.accessToken) && tokens.expiresAt - EXPIRY_MARGIN_MS > now;
+/** The account-side reason of a sign-in that ended back on the identity pages. */
+function failureFrom(url, html = '') {
+  const page = new URL(url);
+  const code = page.searchParams.get('error') ?? parseTemplateModel(html)?.model?.error ?? '';
+  const text = typeof code === 'string' ? code : JSON.stringify(code);
+  if (/password_invalid|email_invalid|identifier|user_id/i.test(text)) {
+    return new VwAuthError(text, MESSAGES.badCredentials);
+  }
+  if (/throttle|rate_limit|too_many/i.test(text)) {
+    return new VwAuthError(text, MESSAGES.throttled);
+  }
+  if (/account_disabled|locked|blocked/i.test(text)) {
+    return new VwAuthError(text, MESSAGES.locked);
+  }
+  return new VwAuthError(text || `sign-in stopped on ${page.pathname}`, MESSAGES.portalConsent);
 }
 
 // --- Sign-in --------------------------------------------------------------------
 
 /**
  * Run the complete sign-in with the account email and password. Resolves the
- * normalized tokens. Throws VwAuthError when the account itself is refused.
+ * WebSession holding the portal cookies. Throws VwAuthError when the account
+ * itself is refused.
  */
 export async function login({ email, password, fetch: fetchImpl = httpsFetch, logger }) {
   if (!email || !password) {
-    throw new VwAuthError('missing credentials', {
-      en: 'Enter the email address and the password of your Volkswagen account.',
-      fr: 'Renseignez l’adresse e-mail et le mot de passe de votre compte Volkswagen.',
-    });
+    throw new VwAuthError('missing credentials', MESSAGES.missingCredentials);
   }
   const web = new WebSession({ fetch: fetchImpl, headers: WEB_HEADERS });
 
-  // 1. The backend builds the OpenID authorization URL (303 to the identity provider).
-  const nonce = randomBytes(16).toString('hex');
-  const start = new URL(AUTHORIZE_URL);
-  start.searchParams.set('redirect_uri', REDIRECT_URI);
-  start.searchParams.set('nonce', nonce);
-  const startResponse = await web.request('GET', start.toString(), {
-    plain: true,
-    headers: { ...BFF_HEADERS, 'weconnect-trace-id': traceId() },
-  });
-  const authorizeLocation = startResponse.headers.get('location');
-  if (startResponse.status < 300 || startResponse.status >= 400 || !authorizeLocation) {
-    throw new Error(`Volkswagen authorization URL unavailable (${describeFailure(startResponse)})`);
+  // 1. The OpenID authorization of the portal's client: the email page.
+  const authorize = new URL(AUTHORIZE_URL);
+  authorize.search = new URLSearchParams({
+    client_id: CLIENT_ID,
+    response_type: 'code',
+    scope: SCOPE,
+    state: `de__en__${BRAND}`,
+    redirect_uri: REDIRECT_URI,
+    prompt: 'login',
+    nonce: randomBytes(24).toString('base64url'),
+  }).toString();
+  const first = await web.request('GET', authorize.toString());
+  const emailPage = await web.follow(authorize.toString(), first);
+  if (emailPage.response.status !== 200) {
+    throw new Error(
+      `Volkswagen sign-in page unavailable (HTTP ${emailPage.response.status}, ${hostOf(emailPage.url)})`,
+    );
+  }
+  const emailHtml = await emailPage.response.text();
+  const emailForm = parseForm(emailHtml, 'emailPasswordForm') ?? parseForm(emailHtml);
+  const emailTemplate = parseTemplateModel(emailHtml);
+  const emailFields = {
+    ...(emailForm?.data ?? {}),
+    ...pick(emailTemplate?.model, ['hmac', 'relayState']),
+  };
+  if (emailTemplate?.csrf && !emailFields._csrf) {
+    emailFields._csrf = emailTemplate.csrf;
+  }
+  if (!emailForm?.action || !emailFields.hmac || !emailFields._csrf) {
+    throw new Error('Volkswagen sign-in page not recognized (the layout may have changed)');
   }
 
-  // 2. Reach the login page.
-  const page = await web.follow(resolveLocation(authorizeLocation, start.toString()));
-  let appRedirect;
-  if (isAppRedirect(page.url)) {
-    appRedirect = page.url;
-  } else {
-    if (page.response.status >= 400) {
-      throw new Error(`Volkswagen login page unavailable (HTTP ${page.response.status})`);
-    }
-    const html = await page.response.text();
-    const emailForm = parseForm(html, 'emailPasswordForm');
-    const afterLogin = emailForm
-      ? await legacyLogin(web, { email, password, emailForm, logger })
-      : await singleFormLogin(web, { email, password, html, logger });
-    appRedirect = await followToApp(web, afterLogin);
-  }
-
-  // 3. Swap the OpenID tokens for the backend's own.
-  const params = parseAppRedirect(appRedirect);
-  for (const key of ['state', 'id_token', 'access_token', 'code']) {
-    if (!params[key]) {
-      throw new Error(`The Volkswagen sign-in ended without "${key}"`);
-    }
-  }
-  const tokenResponse = await web.request('POST', LOGIN_TOKEN_URL, {
-    plain: true,
-    headers: { ...BFF_HEADERS, accept: 'application/json', 'weconnect-trace-id': traceId() },
-    json: {
-      state: params.state,
-      id_token: params.id_token,
-      redirect_uri: REDIRECT_URI,
-      region: 'emea',
-      access_token: params.access_token,
-      authorizationCode: params.code,
-    },
+  // 2. The email, then the password page.
+  const identifierUrl = new URL(emailForm.action, emailPage.url).toString();
+  const afterEmail = await web.request('POST', identifierUrl, {
+    form: { ...emailFields, email },
+    headers: { referer: emailPage.url },
   });
-  if (tokenResponse.status !== 200) {
-    throw new Error(`Volkswagen token exchange failed (${describeFailure(tokenResponse)})`);
-  }
-  logger?.info('Signed in to the Volkswagen account');
-  return normalizeTokens(await tokenResponse.json());
-}
-
-/** The historical two-step form: email first, then password. */
-async function legacyLogin(web, { email, password, emailForm }) {
-  const emailUrl = new URL(emailForm.action, IDENTITY_URL).toString();
-  const emailResponse = await web.request('POST', emailUrl, {
-    form: { ...emailForm.data, email },
-  });
-  const passwordPage = await web.follow(emailUrl, { first: emailResponse });
-  if (!passwordPage.response || passwordPage.response.status !== 200) {
-    throw new Error('Volkswagen password page unavailable');
-  }
-  const template = parseTemplateModel(await passwordPage.response.text());
-  if (!template) {
-    throw new Error('Volkswagen password page not recognized');
-  }
-  const { model, csrf } = template;
-  if (model.error || model.errorCode) {
-    throw new VwAuthError(`login error ${model.error ?? model.errorCode}`, BAD_CREDENTIALS);
+  const passwordPage = await web.follow(identifierUrl, afterEmail);
+  const passwordHtml = await passwordPage.response.text();
+  const template = parseTemplateModel(passwordHtml);
+  const model = template?.model ?? {};
+  if (passwordPage.response.status >= 400 || model.error || model.errorCode) {
+    throw failureFrom(passwordPage.url, passwordHtml);
   }
   if (model.registerCredentialsPath === 'register') {
-    throw new VwAuthError('unknown account', BAD_CREDENTIALS);
+    throw new VwAuthError('unknown account', MESSAGES.badCredentials);
   }
-  if (!model.postAction || !model.hmac || !model.relayState) {
-    throw new Error('Volkswagen password page incomplete');
+  if (!model.hmac || !model.relayState) {
+    throw new Error('Volkswagen password page not recognized (the layout may have changed)');
   }
-  const authenticateUrl = `${IDENTITY_URL}/signin-service/v1/${CLIENT_ID}/${model.postAction}`;
-  const response = await web.request('POST', authenticateUrl, {
+  // The password goes where the email went, `identifierUrl` -> `postAction`.
+  const passwordForm = parseForm(passwordHtml);
+  const authenticateUrl =
+    model.identifierUrl && model.postAction && identifierUrl.includes(model.identifierUrl)
+      ? identifierUrl.replace(model.identifierUrl, model.postAction)
+      : new URL(
+          passwordForm?.action ?? passwordPage.url.split('?')[0],
+          passwordPage.url,
+        ).toString();
+
+  // 3. The password; the redirects lead back to the portal, which sets the
+  // session cookies. Stop before its landing page, skip the optional
+  // marketing consent through its own callback.
+  const afterPassword = await web.request('POST', authenticateUrl, {
     form: {
-      _csrf: csrf ?? '',
+      _csrf: template.csrf ?? passwordForm?.data?._csrf ?? '',
       relayState: model.relayState,
       hmac: model.hmac,
       email,
       password,
     },
+    headers: { referer: passwordPage.url },
   });
-  const location = response.headers.get('location');
-  if (response.status < 300 || response.status >= 400 || !location) {
-    throw new Error(`Volkswagen sign-in answered HTTP ${response.status}`);
+  const landing = await web.follow(authenticateUrl, afterPassword, {
+    stopBefore: isPortalLandingPage,
+    rewrite: (next) => marketingConsentCallback(next) ?? next,
+  });
+
+  const end = new URL(landing.stoppedAt ?? landing.url);
+  if (end.origin !== PORTAL_URL) {
+    const html = landing.stoppedAt ? '' : await landing.response.text();
+    throw failureFrom(end.toString(), html);
   }
-  const next = resolveLocation(location, authenticateUrl);
-  if (!isAppRedirect(next)) {
-    const error = new URL(next).searchParams.get('error');
-    if (error === 'login.error.throttled') {
-      throw new VwAuthError('throttled', THROTTLED);
-    }
-    if (error) {
-      throw new VwAuthError(error, BAD_CREDENTIALS);
-    }
-    if (new URL(next).searchParams.get('updated') === 'dataprivacy') {
-      throw new VwAuthError('terms to accept', TERMS_TO_ACCEPT);
-    }
+  if (!landing.stoppedAt && landing.response.status >= 400) {
+    throw new Error(`The Volkswagen portal refused the sign-in (HTTP ${landing.response.status})`);
   }
-  return next;
+  if (!web.jar.value('access_token', `${PORTAL_URL}/proxy_api/`)) {
+    throw new VwAuthError('no portal session', MESSAGES.portalConsent);
+  }
+  logger?.info('Signed in to the Volkswagen EU Data Act portal');
+  return web;
 }
 
-/** The newer single form (`/u/login?state=...`): username + password at once. */
-async function singleFormLogin(web, { email, password, html }) {
-  const state = parseLoginState(html);
-  if (!state) {
-    throw new Error('Volkswagen login page not recognized');
-  }
-  const loginUrl = `${IDENTITY_URL}/u/login?state=${encodeURIComponent(state)}`;
-  const response = await web.request('POST', loginUrl, {
-    form: { username: email, password, state },
-  });
-  const location = response.headers.get('location');
-  if (response.status < 300 || response.status >= 400 || !location) {
-    // The page is served again (HTTP 400) when the credentials are wrong.
-    if (response.status === 400 || response.status === 401 || response.status === 200) {
-      throw new VwAuthError(`login refused (HTTP ${response.status})`, BAD_CREDENTIALS);
+function pick(object, keys) {
+  const picked = {};
+  for (const key of keys) {
+    if (object?.[key]) {
+      picked[key] = object[key];
     }
-    throw new Error(`Volkswagen sign-in answered HTTP ${response.status}`);
   }
-  return resolveLocation(location, loginUrl);
-}
-
-/** Follow the post-login redirects to `weconnect://authenticated#...`. */
-async function followToApp(web, url) {
-  let current = url;
-  for (let hop = 0; hop < 15; hop += 1) {
-    if (isAppRedirect(current)) {
-      return current;
-    }
-    if (current.includes('terms-and-conditions') || current.includes('/consent')) {
-      throw new VwAuthError('terms to accept', TERMS_TO_ACCEPT);
-    }
-    const response = await web.request('GET', current);
-    const location = response.headers.get('location');
-    if (!location) {
-      throw new Error(
-        `Volkswagen sign-in stopped on ${hostOf(current)} (HTTP ${response.status}); ` +
-          'sign in once in the Volkswagen app to check the account',
-      );
-    }
-    current = resolveLocation(location, current);
-  }
-  throw new Error('Too many redirects after the Volkswagen sign-in');
-}
-
-/**
- * Refresh the backend tokens. Resolves the new normalized tokens (the refresh
- * token is kept when the response carries none). Throws VwAuthError when the
- * refresh token is refused, so the caller signs in again.
- */
-export async function refresh(tokens, { fetch: fetchImpl = httpsFetch } = {}) {
-  if (!tokens?.refreshToken) {
-    throw new VwAuthError('no refresh token');
-  }
-  const response = await fetchImpl(REFRESH_TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      'user-agent': APP_USER_AGENT,
-      'x-android-package-name': APP_PACKAGE,
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: tokens.refreshToken,
-      client_id: CLIENT_ID,
-    }).toString(),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (response.status === 400 || response.status === 401 || response.status === 403) {
-    throw new VwAuthError(`refresh refused (HTTP ${response.status})`);
-  }
-  if (response.status !== 200) {
-    throw new Error(`Volkswagen token refresh failed (HTTP ${response.status})`);
-  }
-  return normalizeTokens(await response.json(), tokens);
+  return picked;
 }

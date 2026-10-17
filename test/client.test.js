@@ -1,54 +1,55 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
+import zlib from 'node:zlib';
 import { VwAuthError } from '../src/vw/auth.js';
-import { VwApiError, VwClient } from '../src/vw/client.js';
-import { createFileTokenStore, createMemoryTokenStore } from '../src/vw/tokenStore.js';
-import { VIN, createFakeVolkswagen } from './helpers/fakeVolkswagen.js';
+import { NoDataRequestError, VwClient } from '../src/vw/client.js';
+import { readJsonFromZip } from '../src/vw/zip.js';
+import { VIN, createFakeVolkswagen, sampleDataset, zipJson } from './helpers/fakeVolkswagen.js';
 
 const credentials = { email: 'driver@example.com', password: 'secret-password' };
 
-test('signs in once, then reuses the token', async () => {
+test('lists the cars linked to the portal, signing in once', async () => {
   const vw = createFakeVolkswagen();
   const client = new VwClient({ ...credentials, fetch: vw.fetch });
   const [vehicles] = await Promise.all([client.getVehicles(), client.getVehicles()]);
-  await client.getStatus(VIN);
-  assert.equal(vehicles[0].vin, VIN);
+  assert.deepEqual(vehicles, [{ vin: VIN, nickname: 'Ma ID.3', model: 'ID.3' }]);
   assert.equal(vw.logins, 1, 'concurrent calls share one sign-in');
 });
 
-test('an expired token is refreshed, not signed in again', async () => {
-  let now = Date.now();
-  const vw = createFakeVolkswagen({ now: () => now });
-  const client = new VwClient({ ...credentials, fetch: vw.fetch, now: () => now });
-  await client.getVehicles();
-  now += 2 * 3600 * 1000;
-  await client.getVehicles();
-  assert.equal(vw.logins, 1);
-  assert.equal(vw.refreshes, 1);
-});
-
-test('a token revoked before its expiry is renewed on the 401, once', async () => {
+test('reads the data request, lists and downloads the datasets', async () => {
   const vw = createFakeVolkswagen();
   const client = new VwClient({ ...credentials, fetch: vw.fetch });
-  await client.getVehicles();
-  vw.revokeAccessTokens();
-  await client.getVehicles();
-  assert.equal(vw.refreshes, 1);
+  const identifier = await client.getDataRequest(VIN);
+  const list = await client.listDatasets(VIN, identifier);
+  assert.equal(list.length, 1, 'the "no content" placeholder is left out');
+  const dataset = await client.downloadDataset(VIN, identifier, list[0].name);
+  assert.equal(dataset.vin, VIN);
+  assert.ok(dataset.Data.length > 5);
 });
 
-test('a refused refresh token falls back to a full sign-in', async () => {
-  let now = Date.now();
-  const vw = createFakeVolkswagen({ now: () => now });
-  const client = new VwClient({ ...credentials, fetch: vw.fetch, now: () => now });
-  await client.getVehicles();
-  vw.revokeRefreshTokens();
-  now += 2 * 3600 * 1000;
-  await client.getVehicles();
-  assert.equal(vw.logins, 2);
+test('a car without data request is reported as such', async () => {
+  const vw = createFakeVolkswagen({ dataRequest: false });
+  const client = new VwClient({ ...credentials, fetch: vw.fetch });
+  await assert.rejects(client.getDataRequest(VIN), NoDataRequestError);
 });
+
+test('no dataset yet is an empty list, not an error', async () => {
+  const vw = createFakeVolkswagen({ datasets: [] });
+  const client = new VwClient({ ...credentials, fetch: vw.fetch });
+  assert.deepEqual(await client.listDatasets(VIN, 'req-1'), []);
+});
+
+for (const expiredAnswer of [401, 500]) {
+  test(`an expired session (HTTP ${expiredAnswer}) signs in again, once`, async () => {
+    const vw = createFakeVolkswagen();
+    vw.expiredAnswer = expiredAnswer;
+    const client = new VwClient({ ...credentials, fetch: vw.fetch });
+    await client.getVehicles();
+    vw.expireSessions();
+    await client.getVehicles();
+    assert.equal(vw.logins, 2);
+  });
+}
 
 test('a refused sign-in is not retried for a while (account lock-out)', async () => {
   let now = Date.now();
@@ -68,92 +69,24 @@ test('a refused sign-in is not retried for a while (account lock-out)', async ()
   assert.ok(vw.requests.length > attempts, 'tried again after the delay');
 });
 
-test('the tokens survive a restart through the store', async () => {
-  const vw = createFakeVolkswagen();
-  const tokenStore = createMemoryTokenStore();
-  await new VwClient({ ...credentials, fetch: vw.fetch, tokenStore }).getVehicles();
-  await new VwClient({ ...credentials, fetch: vw.fetch, tokenStore }).getVehicles();
-  assert.equal(vw.logins, 1);
+test('the ZIP reader handles deflated and stored entries', () => {
+  const document = sampleDataset();
+  assert.deepEqual(readJsonFromZip(zipJson(document)), document);
 
-  // Another account never reuses them.
-  vw.email = 'other@example.com';
-  await new VwClient({
-    email: 'other@example.com',
-    password: credentials.password,
-    fetch: vw.fetch,
-    tokenStore,
-  }).getVehicles();
-  assert.equal(vw.logins, 2);
-});
-
-test('the file store writes a private file under the data directory', async () => {
-  const dataDir = await mkdtemp(path.join(tmpdir(), 'vw-tokens-'));
-  try {
-    const store = createFileTokenStore({ dataDir });
-    assert.equal(await store.load(credentials.email), undefined);
-    await store.save(credentials.email, { accessToken: 'a', refreshToken: 'r', expiresAt: 1 });
-    assert.deepEqual(await store.load(credentials.email), {
-      accessToken: 'a',
-      refreshToken: 'r',
-      expiresAt: 1,
-    });
-    assert.equal(await store.load('someone@else.com'), undefined);
-    const file = path.join(dataDir, 'vw-tokens.json');
-    assert.equal((await stat(file)).mode & 0o777, 0o600);
-    assert.ok(!(await readFile(file, 'utf8')).includes(credentials.email), 'no email in clear');
-    await store.clear();
-    assert.equal(await store.load(credentials.email), undefined);
-  } finally {
-    await rm(dataDir, { recursive: true, force: true });
-  }
-});
-
-test('commands hit the documented endpoints', async () => {
-  const vw = createFakeVolkswagen();
-  const client = new VwClient({ ...credentials, fetch: vw.fetch });
-  await client.startCharging(VIN);
-  await client.stopCharging(VIN);
-  await client.setChargingSettings(VIN, { targetSOC_pct: 90 });
-  await client.startClimatisation(VIN, { targetTemperature: 21 });
-  await client.stopClimatisation(VIN);
-  await client.setLocked(VIN, true, '1234');
-  await client.wakeUp(VIN);
-  assert.deepEqual(
-    vw.commands().map((r) => `${r.method} ${r.path.split(VIN)[1]}`),
-    [
-      'POST /charging/start',
-      'POST /charging/stop',
-      'PUT /charging/settings',
-      'POST /climatisation/start',
-      'POST /climatisation/stop',
-      'POST /access/lock',
-      'POST /vehiclewakeuptrigger',
-    ],
-  );
-  const climatisation = vw.commands()[3];
-  assert.deepEqual(JSON.parse(climatisation.body), {
-    targetTemperature: 21,
-    targetTemperatureUnit: 'celsius',
-  });
-  assert.equal(JSON.parse(vw.commands()[5].body).spin, '1234');
-});
-
-test('an API error carries its HTTP status', async () => {
-  const vw = createFakeVolkswagen();
-  vw.statusCode = 429;
-  const client = new VwClient({ ...credentials, fetch: vw.fetch });
-  await assert.rejects(
-    client.getStatus(VIN),
-    (err) => err instanceof VwApiError && err.status === 429,
-  );
-});
-
-test('the parking position is null while the car drives', async () => {
-  const vw = createFakeVolkswagen();
-  const client = new VwClient({ ...credentials, fetch: vw.fetch });
-  assert.deepEqual(await client.getParkingPosition(VIN), {
-    lat: 48.85,
-    lon: 2.35,
-    carCapturedTimestamp: 'x',
-  });
+  // A stored (uncompressed) entry preceded by another file.
+  const entry = (name, content, method) => {
+    const data = method === 8 ? zlib.deflateRawSync(content) : content;
+    const header = Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(method, 8);
+    header.writeUInt32LE(data.length, 18);
+    header.writeUInt16LE(Buffer.byteLength(name), 26);
+    return Buffer.concat([header, Buffer.from(name), data]);
+  };
+  const archive = Buffer.concat([
+    entry('readme.txt', Buffer.from('hello'), 0),
+    entry('data.json', Buffer.from('﻿{"ok":true}'), 0),
+  ]);
+  assert.deepEqual(readJsonFromZip(archive), { ok: true });
+  assert.throws(() => readJsonFromZip(Buffer.from('not a zip')), /No JSON/);
 });

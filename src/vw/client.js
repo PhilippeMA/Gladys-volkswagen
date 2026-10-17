@@ -1,38 +1,34 @@
 // -----------------------------------------------------------------------------
-// Volkswagen (CARIAD) API client for the ID. range.
+// Volkswagen EU Data Act portal client.
 //
-// Owns the tokens: loads them from the store, refreshes them before they
-// expire, signs in again when the refresh token is refused, and retries a
-// request once on a 401. Every call goes through `request()`.
+// The portal does not answer live questions: once the user enabled a
+// "continuous data request" in a browser (see docs/), the car's data is
+// stored as one dataset — a ZIP holding a JSON list of data points — every
+// 15 minutes. Reading the car means listing the datasets and downloading the
+// new ones. The client owns the portal session: it signs in on first use,
+// signs in again once when the portal answers 401/403 (or its HTML error
+// page, how the portal reports an expired session), and spaces out refused
+// sign-ins.
 //
 // `fetch` is injectable: the tests run the whole client against an in-memory
 // Volkswagen, never the network.
 // -----------------------------------------------------------------------------
 
 import { createLogger } from '@gladysassistant/integration-sdk';
-import { BFF_HEADERS, BFF_URL, VwAuthError, isFresh, login, refresh, traceId } from './auth.js';
+import { PORTAL_URL, VwAuthError, login } from './auth.js';
 import { httpsFetch } from './transport.js';
-import { createMemoryTokenStore } from './tokenStore.js';
+import { readJsonFromZip } from './zip.js';
 
-const logger = createLogger({ name: 'vw-api' });
+const logger = createLogger({ name: 'vw-portal' });
 
 // After a refused sign-in, wait before trying again: every failed attempt
 // counts towards the account lock-out on Volkswagen's side.
 const AUTH_RETRY_DELAY_MS = 15 * 60 * 1000;
 
-// The status sections ("jobs") the integration reads, when the vehicle has
-// the capability of the same name.
-export const STATUS_JOBS = [
-  'access',
-  'charging',
-  'climatisation',
-  'measurements',
-  'fuelStatus',
-  'readiness',
-  'vehicleHealthInspection',
-];
+// Placeholder datasets the portal stores while the car sleeps.
+const NO_CONTENT_SUFFIX = '_no_content_found.zip';
 
-/** A non-2xx answer of the API. `status` is the HTTP status. */
+/** A non-2xx answer of the portal API. `status` is the HTTP status. */
 export class VwApiError extends Error {
   constructor(message, status) {
     super(message);
@@ -41,197 +37,192 @@ export class VwApiError extends Error {
   }
 }
 
+/** The vehicle has no continuous data request on the portal yet. */
+export class NoDataRequestError extends Error {
+  constructor(vin) {
+    super(`No data request configured on the EU Data Act portal for ${vin.slice(-6)}`);
+    this.name = 'NoDataRequestError';
+  }
+}
+
+/** True when the portal reports an expired session (401/403, or its HTML error page). */
+function sessionExpired(status, body) {
+  return status === 401 || status === 403 || (status >= 500 && body.trimStart().startsWith('<'));
+}
+
 export class VwClient {
-  constructor({
-    email,
-    password,
-    fetch: fetchImpl = httpsFetch,
-    tokenStore = createMemoryTokenStore(),
-    now = () => Date.now(),
-  }) {
+  constructor({ email, password, fetch: fetchImpl = httpsFetch, now = () => Date.now() }) {
     this.email = email;
     this.password = password;
     this.fetch = fetchImpl;
-    this.tokenStore = tokenStore;
     this.now = now;
-    this.tokens = undefined;
-    this.tokensLoaded = false;
-    this.pendingTokens = undefined;
+    this.session = undefined;
+    this.pendingLogin = undefined;
     this.authFailure = undefined; // { error, until }
   }
 
-  // --- Tokens ---------------------------------------------------------------
+  // --- Session ----------------------------------------------------------------
 
-  /** A valid access token, refreshing or signing in when needed. */
-  async accessToken({ forceRenew = false } = {}) {
-    if (!this.pendingTokens) {
-      this.pendingTokens = this.#ensureTokens(forceRenew).finally(() => {
-        this.pendingTokens = undefined;
-      });
+  /** The signed-in session; concurrent callers share one sign-in. */
+  async #session({ renew = false, stale } = {}) {
+    if (this.pendingLogin) {
+      return this.pendingLogin;
     }
-    const tokens = await this.pendingTokens;
-    return tokens.accessToken;
+    // A renewal asked with a session another call already renewed reuses it.
+    if (this.session && (!renew || this.session !== stale)) {
+      return this.session;
+    }
+    this.pendingLogin = this.#login().finally(() => {
+      this.pendingLogin = undefined;
+    });
+    return this.pendingLogin;
   }
 
-  async #ensureTokens(forceRenew) {
-    if (!this.tokensLoaded) {
-      this.tokens = await this.tokenStore.load(this.email);
-      this.tokensLoaded = true;
-    }
-    if (!forceRenew && isFresh(this.tokens, this.now())) {
-      return this.tokens;
-    }
-    if (this.tokens?.refreshToken) {
-      try {
-        return await this.#store(await refresh(this.tokens, { fetch: this.fetch }));
-      } catch (err) {
-        if (!(err instanceof VwAuthError)) {
-          throw err;
-        }
-        logger.info('Volkswagen refresh token refused, signing in again');
-      }
-    }
+  async #login() {
     if (this.authFailure && this.authFailure.until > this.now()) {
       throw this.authFailure.error;
     }
     try {
-      const tokens = await login({
+      this.session = await login({
         email: this.email,
         password: this.password,
         fetch: this.fetch,
         logger,
       });
       this.authFailure = undefined;
-      return await this.#store(tokens);
+      return this.session;
     } catch (err) {
+      this.session = undefined;
       if (err instanceof VwAuthError) {
         this.authFailure = { error: err, until: this.now() + AUTH_RETRY_DELAY_MS };
-        await this.tokenStore.clear();
-        this.tokens = undefined;
       }
       throw err;
     }
   }
 
-  async #store(tokens) {
-    this.tokens = tokens;
-    await this.tokenStore.save(this.email, tokens);
-    return tokens;
-  }
-
-  // --- Requests -------------------------------------------------------------
+  // --- Requests -----------------------------------------------------------------
 
   /**
-   * One API call. Resolves `{ status, data }` (`data` undefined on an empty
-   * body). Throws VwApiError on any other status than `okStatuses`.
+   * One GET on the portal API, with the session cookies. Resolves
+   * `{ status, response, body }`; `binary` keeps the body as a Buffer.
    */
-  async request(method, path, { body, okStatuses = [200, 202, 204, 207] } = {}) {
-    let response = await this.#send(method, path, body, await this.accessToken());
-    if (response.status === 401) {
-      // The token died before its announced expiry: renew it once.
-      response = await this.#send(method, path, body, await this.accessToken({ forceRenew: true }));
+  async #get(path, headers = {}, { binary = false } = {}) {
+    const url = `${PORTAL_URL}${path}`;
+    let session = await this.#session();
+    let answer = await this.#send(session, url, headers, binary);
+    if (sessionExpired(answer.status, answer.text)) {
+      session = await this.#session({ renew: true, stale: session });
+      answer = await this.#send(session, url, headers, binary);
     }
-    if (!okStatuses.includes(response.status)) {
-      const detail = await response.text().catch(() => '');
-      throw new VwApiError(
-        `${method} ${path.split('?')[0]} answered HTTP ${response.status}` +
-          (detail ? `: ${detail.slice(0, 200)}` : ''),
-        response.status,
-      );
+    return answer;
+  }
+
+  async #send(session, url, headers, binary) {
+    const response = await session.request('GET', url, {
+      headers: { accept: binary ? '*/*' : 'application/json', ...headers },
+    });
+    if (binary && response.status === 200) {
+      const body = Buffer.from(await response.arrayBuffer());
+      return { status: response.status, body, text: body.subarray(0, 1).toString() };
     }
     const text = await response.text();
-    return { status: response.status, data: text ? JSON.parse(text) : undefined };
+    return { status: response.status, body: text, text };
   }
 
-  #send(method, path, body, token) {
-    const headers = {
-      ...BFF_HEADERS,
-      authorization: `Bearer ${token}`,
-      'weconnect-trace-id': traceId(),
-    };
-    return this.fetch(`${BFF_URL}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-    });
-  }
-
-  // --- Vehicles ---------------------------------------------------------------
-
-  /** The vehicles of the account: `[{ vin, nickname, model, capabilities }]`. */
-  async getVehicles() {
-    const { data } = await this.request('GET', '/vehicle/v1/vehicles');
-    return (data?.data ?? []).filter((vehicle) => typeof vehicle.vin === 'string');
-  }
-
-  /** The raw `selectivestatus` of a vehicle, for the given jobs. */
-  async getStatus(vin, jobs = STATUS_JOBS) {
-    const query = encodeURIComponent(jobs.join(','));
-    const { data } = await this.request(
-      'GET',
-      `/vehicle/v1/vehicles/${encodeURIComponent(vin)}/selectivestatus?jobs=${query}`,
+  #fail(what, { status, text }) {
+    return new VwApiError(
+      `${what} answered HTTP ${status}${text ? `: ${text.replace(/\s+/g, ' ').slice(0, 160)}` : ''}`,
+      status,
     );
-    return data ?? {};
   }
 
-  /** `{ lat, lon, carCapturedTimestamp }`, or null while the car is driving. */
-  async getParkingPosition(vin) {
-    const { status, data } = await this.request(
-      'GET',
-      `/vehicle/v1/vehicles/${encodeURIComponent(vin)}/parkingposition`,
-      { okStatuses: [200, 204, 404] },
-    );
-    return status === 200 ? (data?.data ?? null) : null;
-  }
-
-  // --- Commands ---------------------------------------------------------------
-
-  #vehiclePath(vin, suffix) {
-    return `/vehicle/v1/vehicles/${encodeURIComponent(vin)}/${suffix}`;
-  }
-
-  startCharging(vin) {
-    return this.request('POST', this.#vehiclePath(vin, 'charging/start'), { body: {} });
-  }
-
-  stopCharging(vin) {
-    return this.request('POST', this.#vehiclePath(vin, 'charging/stop'), { body: {} });
-  }
-
-  /** `targetSOC_pct`: 50 to 100, by steps of 10 on the ID. range. */
-  setChargingSettings(vin, settings) {
-    return this.request('PUT', this.#vehiclePath(vin, 'charging/settings'), { body: settings });
-  }
-
-  startClimatisation(vin, { targetTemperature } = {}) {
-    const body = {};
-    if (targetTemperature !== undefined) {
-      body.targetTemperature = targetTemperature;
-      body.targetTemperatureUnit = 'celsius';
+  #json(what, answer) {
+    try {
+      return JSON.parse(answer.text);
+    } catch {
+      throw this.#fail(`${what} (invalid JSON)`, answer);
     }
-    return this.request('POST', this.#vehiclePath(vin, 'climatisation/start'), { body });
   }
 
-  stopClimatisation(vin) {
-    return this.request('POST', this.#vehiclePath(vin, 'climatisation/stop'), { body: {} });
+  // --- Portal API ---------------------------------------------------------------
+
+  /** The cars linked to the portal: `[{ vin, nickname, model }]`. */
+  async getVehicles() {
+    const answer = await this.#get('/proxy_api/consent/me/vehicles?viewPosition=FRONT_LEFT');
+    if (answer.status !== 200) {
+      throw this.#fail('The vehicle list', answer);
+    }
+    const payload = this.#json('The vehicle list', answer);
+    const list = Array.isArray(payload) ? payload : (payload?.vehicles ?? []);
+    const vehicles = new Map();
+    for (const entry of list) {
+      const vin = entry?.vin ?? entry?.vehicleIdentificationNumber;
+      if (typeof vin !== 'string' || vin.length !== 17 || vehicles.has(vin)) {
+        continue;
+      }
+      vehicles.set(vin, {
+        vin,
+        nickname: entry.nickName ?? entry.vehicleNickname ?? entry.nickname ?? undefined,
+        model: entry.modelName ?? undefined,
+      });
+    }
+    return [...vehicles.values()];
   }
 
-  setClimatisationSettings(vin, settings) {
-    return this.request('PUT', this.#vehiclePath(vin, 'climatisation/settings'), {
-      body: settings,
-    });
+  /** Identifier of the car's continuous data request; NoDataRequestError if none. */
+  async getDataRequest(vin) {
+    const answer = await this.#get(
+      `/proxy_api/euda-apim/datarequest/vehicles/${encodeURIComponent(vin)}/metadata/partial`,
+    );
+    if (answer.status === 404) {
+      throw new NoDataRequestError(vin);
+    }
+    if (answer.status !== 200) {
+      throw this.#fail('The data request', answer);
+    }
+    const identifier = this.#json('The data request', answer)?.Identifier;
+    if (!identifier) {
+      throw new NoDataRequestError(vin);
+    }
+    return identifier;
   }
 
-  /** Lock or unlock: Volkswagen requires the S-PIN of the account. */
-  setLocked(vin, locked, spin) {
-    return this.request('POST', this.#vehiclePath(vin, locked ? 'access/lock' : 'access/unlock'), {
-      body: { spin },
-    });
+  /**
+   * The datasets of a data request with content, oldest first:
+   * `[{ name, createdOn }]` (`createdOn` in ms). The "no content" placeholders
+   * of a sleeping car are left out.
+   */
+  async listDatasets(vin, identifier) {
+    const answer = await this.#get(
+      `/proxy_api/euda-apim/datadelivery/vehicles/${encodeURIComponent(vin)}/${encodeURIComponent(identifier)}/list`,
+      { type: 'partial' },
+    );
+    // 404 "No files available" until the car delivered its first dataset.
+    if (answer.status === 404) {
+      return [];
+    }
+    if (answer.status !== 200) {
+      throw this.#fail('The dataset list', answer);
+    }
+    const payload = this.#json('The dataset list', answer);
+    const files = Array.isArray(payload) ? payload : (payload?.files ?? []);
+    return files
+      .filter((file) => typeof file?.name === 'string')
+      .filter((file) => !file.name.toLowerCase().endsWith(NO_CONTENT_SUFFIX))
+      .map((file) => ({ name: file.name, createdOn: Date.parse(file.createdOn) || 0 }))
+      .sort((a, b) => a.createdOn - b.createdOn);
   }
 
-  /** Ask the car to send fresh values (it answers within a few minutes). */
-  wakeUp(vin) {
-    return this.request('POST', this.#vehiclePath(vin, 'vehiclewakeuptrigger'), { body: {} });
+  /** One dataset, unzipped: `{ vin, Data: [{ key, dataFieldName, value, timestampUtc }] }`. */
+  async downloadDataset(vin, identifier, name) {
+    const answer = await this.#get(
+      `/proxy_api/euda-apim/datadelivery/vehicles/${encodeURIComponent(vin)}/${encodeURIComponent(identifier)}/download`,
+      { filename: name, type: 'partial' },
+      { binary: true },
+    );
+    if (answer.status !== 200) {
+      throw this.#fail('The dataset download', answer);
+    }
+    return readJsonFromZip(answer.body);
   }
 }

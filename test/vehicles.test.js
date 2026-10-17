@@ -7,12 +7,7 @@ import { createActions } from '../src/actions.js';
 import { CHARGING_COMPLETED_TRIGGER, FEATURES, vehicleIds } from '../src/devices/vehicle.js';
 import { VehicleService, isChargeCompletion } from '../src/vehicles.js';
 import { VwClient } from '../src/vw/client.js';
-import {
-  VIN,
-  createFakeVolkswagen,
-  sampleStatus,
-  sampleVehicle,
-} from './helpers/fakeVolkswagen.js';
+import { VIN, createFakeVolkswagen, sampleDataset } from './helpers/fakeVolkswagen.js';
 
 const config = normalizeConfig({ email: 'driver@example.com', password: 'secret-password' });
 
@@ -31,122 +26,106 @@ async function setup({ vw = createFakeVolkswagen(), cfg = config } = {}) {
   return { vw, gladys, service, device, feature, clock };
 }
 
-test('one device per car, keyed on the VIN, that Gladys accepts', async () => {
+test('one read-only device per car, keyed on the VIN, that Gladys accepts', async () => {
   const { gladys, service, device } = await setup();
   assert.equal(device.external_id, vehicleIds(gladys, VIN).device);
   assert.equal(device.name, 'Ma ID.3');
   assert.equal(device.should_poll, true);
   assert.equal(device.poll_frequency, DEVICE_POLL_FREQUENCIES.EVERY_MINUTES);
   assert.equal(device.features.length, FEATURES.length);
+  assert.ok(
+    device.features.every((f) => f.read_only),
+    'the portal takes no command',
+  );
   // The SDK fake refuses what the host API refuses (category, unit...).
   await gladys.publishDiscoveredDevices(service.discoveredDevices());
   assert.equal(gladys.fake.discoveredDevices.length, 1);
 });
 
-test('features follow the capabilities of the car', async () => {
-  const vw = createFakeVolkswagen({
-    vehicles: [
-      sampleVehicle({
-        nickname: null,
-        capabilities: [
-          { id: 'charging', status: [] },
-          { id: 'climatisation', status: [1003] },
-        ],
-      }),
-    ],
-  });
-  const { device } = await setup({ vw });
-  assert.equal(device.name, 'Volkswagen ID.3');
-  const keys = device.features.map((f) => f.external_id.split(':').pop());
-  assert.ok(keys.includes('battery-level'));
-  assert.ok(!keys.includes('climatisation'), 'no switch for a disabled capability');
-  assert.ok(!keys.includes('locked'));
-});
-
-test('a poll publishes the status, then waits for the configured interval', async () => {
+test('a poll publishes the dataset, then waits for the configured interval', async () => {
   const { vw, gladys, service, device, feature, clock } = await setup();
   assert.equal(await service.poll(device), true);
   assert.equal(gladys.fake.lastState(feature('battery-level').external_id), 64);
   assert.equal(gladys.fake.lastState(feature('range').external_id), 251);
   assert.equal(gladys.fake.lastState(feature('plugged').external_id), 1);
   assert.equal(gladys.fake.lastState(feature('locked').external_id), 1);
-  assert.equal(gladys.fake.lastState(feature('outside-temperature').external_id), 12);
+  assert.equal(gladys.fake.lastState(feature('odometer').external_id), 23456);
+  assert.equal(gladys.fake.lastState(feature('outside-temperature').external_id), 12.1);
+  assert.equal(gladys.fake.lastState(feature('remaining-charging-time').external_id), undefined);
 
-  const reads = () => vw.requests.filter((r) => r.path.includes('selectivestatus')).length;
   clock.now += 60_000;
   assert.equal(await service.poll(device), false, 'not due after a minute');
   clock.now += 240_000;
   assert.equal(await service.poll(device), true, 'due after 300 s');
-  assert.equal(reads(), 2);
+  assert.equal(vw.count('/download'), 1, 'a dataset is downloaded once');
 });
 
-test('only the changed values are published again', async () => {
-  const { gladys, service, device, clock } = await setup();
-  await service.poll(device);
-  const published = gladys.fake.states.length;
-  clock.now += 300_000;
-  await service.poll(device);
-  assert.equal(gladys.fake.states.length, published, 'nothing changed, nothing sent');
-});
-
-test('a failed read waits for the next interval too', async () => {
-  const { vw, service, device, clock } = await setup();
-  vw.statusCode = 429;
-  await assert.rejects(service.poll(device));
-  clock.now += 60_000;
-  assert.equal(await service.poll(device), false);
-});
-
-test('commands reach Volkswagen and show the requested value', async () => {
+test('only the new datasets are downloaded and merged', async () => {
   const { vw, gladys, service, device, feature, clock } = await setup();
   await service.poll(device);
-
-  await service.setValue(device, feature('charging'), 1);
-  await service.setValue(device, feature('climatisation'), 1);
-  await service.setValue(device, feature('target-battery-level'), 87);
-  await service.setValue(device, feature('target-temperature'), 22.3);
-  const sent = vw.commands().map((r) => [r.path.split(`${VIN}/`)[1], JSON.parse(r.body)]);
-  assert.deepEqual(sent, [
-    ['charging/start', {}],
-    ['climatisation/start', { targetTemperature: 21.5, targetTemperatureUnit: 'celsius' }],
-    ['charging/settings', { targetSOC_pct: 90, maxChargeCurrentAC: 'maximum' }],
-    ['climatisation/settings', { targetTemperature: 22.5, targetTemperatureUnit: 'celsius' }],
-  ]);
-  assert.equal(gladys.fake.lastState(feature('charging').external_id), 1);
-  assert.equal(gladys.fake.lastState(feature('target-battery-level').external_id), 90);
-
-  // The car is read again soon, to confirm.
-  clock.now += 50_000;
-  assert.equal(await service.poll(device), true);
-});
-
-test('locking needs the S-PIN', async () => {
-  const { vw, service, device, feature } = await setup();
-  await assert.rejects(service.setValue(device, feature('locked'), 0), /S-PIN/);
-  assert.equal(vw.commands().length, 0);
-
-  service.configure({ ...config, spin: '1234' });
-  await service.setValue(device, feature('locked'), 0);
-  const [unlock] = vw.commands();
-  assert.match(unlock.path, /access\/unlock$/);
-  assert.deepEqual(JSON.parse(unlock.body), { spin: '1234' });
-});
-
-test('read-only features refuse commands', async () => {
-  const { service, device, feature } = await setup();
-  await assert.rejects(
-    service.setValue(device, feature('battery-level'), 50),
-    /cannot be controlled/,
+  vw.deliver(
+    {
+      Data: [{ key: '506cb83e-f99f-3af3-bbeb-0429b69a78d9', dataFieldName: 'value', value: '70' }],
+    },
+    '2026-10-17T08:15:00Z',
   );
+  clock.now += 300_000;
+  await service.poll(device);
+  assert.equal(vw.count('/download'), 2);
+  assert.equal(gladys.fake.lastState(feature('battery-level').external_id), 70);
+  assert.equal(gladys.fake.lastState(feature('range').external_id), 251, 'kept from before');
+});
+
+test('the first read merges the newest datasets only', async () => {
+  const datasets = Array.from({ length: 10 }, (_, i) => ({
+    name: `request_${i}.zip`,
+    createdOn: new Date(Date.UTC(2026, 9, 17, 8, i * 15)).toISOString(),
+    content: sampleDataset({ soc: 50 + i }),
+  }));
+  const { vw, gladys, service, device, feature } = await setup({
+    vw: createFakeVolkswagen({ datasets }),
+  });
+  await service.poll(device);
+  assert.equal(vw.count('/download'), 4);
+  assert.equal(gladys.fake.lastState(feature('battery-level').external_id), 59, 'the newest');
+});
+
+test('a car not delivering yet publishes nothing and says so', async () => {
+  const { gladys, service, device } = await setup({ vw: createFakeVolkswagen({ datasets: [] }) });
+  assert.equal(await service.refreshStatus(service.findVehicle(device.external_id)), undefined);
+  assert.equal(gladys.fake.states.length, 0);
+  assert.match((await createActions(service).test_connection()).en, /no data yet/);
+});
+
+test('a missing data request is shown in the Configuration screen', async () => {
+  const { gladys, service, device } = await setup({
+    vw: createFakeVolkswagen({ dataRequest: false }),
+  });
+  await assert.rejects(service.poll(device));
+  assert.equal(gladys.fake.connectionStatus.connected, false);
+  assert.match(gladys.fake.connectionStatus.message.en, /continuous data request/);
+  assert.match((await createActions(service).test_connection()).fr, /demande de données/);
 });
 
 test('a completed charge fires the scene trigger once', async () => {
-  const { vw, gladys, service, device, clock } = await setup();
-  vw.status = sampleStatus({ chargingState: 'charging', soc: 79 });
+  const { vw, gladys, service, device, clock } = await setup({
+    vw: createFakeVolkswagen({
+      datasets: [
+        {
+          name: 'a.zip',
+          createdOn: '2026-10-17T08:00:00Z',
+          content: sampleDataset({ chargeState: 'CHARGE_STATE_CHARGING_HV_BATTERY', soc: 79 }),
+        },
+      ],
+    }),
+  });
   await service.poll(device);
   assert.equal(gladys.fake.sceneEvents.length, 0);
 
-  vw.status = sampleStatus({ chargingState: 'chargePurposeReachedAndConservation', soc: 80 });
+  vw.deliver(
+    sampleDataset({ chargeState: 'CHARGE_STATE_CHARGE_PURPOSE_REACHED_AND_CONSERVATION', soc: 80 }),
+    '2026-10-17T08:15:00Z',
+  );
   clock.now += 300_000;
   await service.poll(device);
   clock.now += 300_000;
@@ -184,6 +163,24 @@ test('a refused account is shown in the Configuration screen', async () => {
   assert.match(gladys.fake.connectionStatus.message.fr, /mot de passe/);
 });
 
+test('an unreachable portal is shown in the Configuration screen too', async () => {
+  const gladys = createFakeGladys();
+  const service = new VehicleService(gladys, {
+    createClient: (c) =>
+      new VwClient({
+        email: c.email,
+        password: c.password,
+        fetch: async () => {
+          throw new Error('getaddrinfo ENOTFOUND identity.vwgroup.io');
+        },
+      }),
+  });
+  service.configure(config);
+  await assert.rejects(service.loadVehicles());
+  assert.equal(gladys.fake.connectionStatus.connected, false);
+  assert.match(gladys.fake.connectionStatus.message.en, /ENOTFOUND/);
+});
+
 test('without credentials, nothing is sent to Volkswagen', async () => {
   const gladys = createFakeGladys();
   const service = new VehicleService(gladys, {
@@ -196,12 +193,9 @@ test('without credentials, nothing is sent to Volkswagen', async () => {
   assert.ok(message.en.includes('Enter'));
 });
 
-test('the actions test the account and wake a car up', async () => {
-  const { vw, service, device } = await setup();
-  const actions = createActions(service);
-  assert.match((await actions.test_connection()).en, /Ma ID\.3/);
-  assert.match((await actions.wake_up({ device: device.external_id })).fr, /se réveille/);
-  assert.match(vw.commands().at(-1).path, /vehiclewakeuptrigger$/);
+test('the connection test signs in, lists and reads the cars', async () => {
+  const { service } = await setup();
+  assert.match((await createActions(service).test_connection()).en, /Ma ID\.3.*Discovery/);
 });
 
 test('new credentials start a new session', async () => {
@@ -210,22 +204,4 @@ test('new credentials start a new session', async () => {
   assert.equal(service.vehicles.length, 1, 'same account: the cars are kept');
   assert.equal(service.configure({ ...config, email: 'other@example.com' }), true);
   assert.equal(service.vehicles.length, 0);
-});
-
-test('an unreachable account is shown in the Configuration screen too', async () => {
-  const gladys = createFakeGladys();
-  const service = new VehicleService(gladys, {
-    createClient: (c) =>
-      new VwClient({
-        email: c.email,
-        password: c.password,
-        fetch: async () => {
-          throw new Error('getaddrinfo ENOTFOUND emea.bff.cariad.digital');
-        },
-      }),
-  });
-  service.configure(config);
-  await assert.rejects(service.loadVehicles());
-  assert.equal(gladys.fake.connectionStatus.connected, false);
-  assert.match(gladys.fake.connectionStatus.message.en, /ENOTFOUND/);
 });

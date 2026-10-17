@@ -1,55 +1,66 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CLIENT_ID,
   VwAuthError,
   decodeEntities,
-  isFresh,
+  isPortalLandingPage,
   login,
-  normalizeTokens,
-  parseAppRedirect,
+  marketingConsentCallback,
   parseForm,
   parseTemplateModel,
-  refresh,
 } from '../src/vw/auth.js';
 import { CookieJar } from '../src/vw/http.js';
 import { createFakeVolkswagen } from './helpers/fakeVolkswagen.js';
 
 const credentials = { email: 'driver@example.com', password: 'secret-password' };
+const PORTAL_API = 'https://eu-data-act.drivesomethinggreater.com/proxy_api/';
 
-for (const loginFlow of ['legacy', 'single']) {
-  test(`signs in through the ${loginFlow} login page`, async () => {
-    const vw = createFakeVolkswagen({ loginFlow });
-    const tokens = await login({ ...credentials, fetch: vw.fetch });
-    assert.equal(vw.logins, 1);
-    assert.ok(vw.validTokens.has(tokens.accessToken));
-    assert.equal(tokens.refreshToken, 'refresh-1');
-    assert.ok(tokens.expiresAt > Date.now(), 'the expiry comes from the JWT');
-    assert.ok(isFresh(tokens));
-  });
+test('signs in to the portal and keeps its session cookie', async () => {
+  const vw = createFakeVolkswagen();
+  const session = await login({ ...credentials, fetch: vw.fetch });
+  assert.equal(vw.logins, 1);
+  assert.equal(session.jar.value('access_token', PORTAL_API), 'session-1');
+  const authorize = vw.requests[0];
+  assert.match(authorize.path, /^\/oidc\/v1\/authorize\?/);
+  assert.ok(authorize.path.includes(encodeURIComponent(CLIENT_ID)), 'the portal client');
+});
 
-  test(`a wrong password on the ${loginFlow} page is an account error`, async () => {
-    const vw = createFakeVolkswagen({ loginFlow });
-    await assert.rejects(
-      login({ ...credentials, password: 'wrong', fetch: vw.fetch }),
-      (err) => err instanceof VwAuthError && /password/.test(err.userMessage.en),
-    );
-    assert.equal(vw.logins, 0);
-  });
-}
+test('the retired app client is not used any more', async () => {
+  const vw = createFakeVolkswagen();
+  await login({ ...credentials, fetch: vw.fetch });
+  assert.ok(!vw.requests.some((r) => r.path.includes('a24fba63')));
+  assert.ok(!vw.requests.some((r) => r.host === 'emea.bff.cariad.digital'));
+});
+
+test('the optional marketing consent is skipped through its callback', async () => {
+  const vw = createFakeVolkswagen({ marketingConsent: true });
+  const session = await login({ ...credentials, fetch: vw.fetch });
+  assert.equal(session.jar.value('access_token', PORTAL_API), 'session-1');
+});
+
+test('a wrong password is an account error', async () => {
+  const vw = createFakeVolkswagen();
+  await assert.rejects(
+    login({ ...credentials, password: 'wrong', fetch: vw.fetch }),
+    (err) => err instanceof VwAuthError && /password/.test(err.userMessage.en),
+  );
+  assert.equal(vw.logins, 0);
+});
 
 test('an unknown account is an account error', async () => {
   const vw = createFakeVolkswagen();
   await assert.rejects(
     login({ ...credentials, email: 'nobody@example.com', fetch: vw.fetch }),
-    VwAuthError,
+    (err) => err instanceof VwAuthError && /password/.test(err.userMessage.en),
   );
 });
 
-test('terms to accept stop the sign-in with an explicit message', async () => {
-  const vw = createFakeVolkswagen({ termsToAccept: true });
+test('a portal never authorised in a browser says what to do', async () => {
+  const vw = createFakeVolkswagen({ portalConsent: false });
   await assert.rejects(
     login({ ...credentials, fetch: vw.fetch }),
-    (err) => err instanceof VwAuthError && /terms/.test(err.userMessage.en),
+    (err) => err instanceof VwAuthError && /portal/.test(err.userMessage.en),
   );
 });
 
@@ -59,23 +70,7 @@ test('missing credentials never reach Volkswagen', async () => {
   assert.equal(vw.requests.length, 0);
 });
 
-test('a refresh keeps the refresh token when the answer has none', async () => {
-  const vw = createFakeVolkswagen();
-  const tokens = await login({ ...credentials, fetch: vw.fetch });
-  const renewed = await refresh(tokens, { fetch: vw.fetch });
-  assert.notEqual(renewed.accessToken, tokens.accessToken);
-  assert.equal(renewed.refreshToken, tokens.refreshToken);
-  assert.equal(vw.refreshes, 1);
-});
-
-test('a refused refresh token is an account error, so the client signs in again', async () => {
-  const vw = createFakeVolkswagen();
-  const tokens = await login({ ...credentials, fetch: vw.fetch });
-  vw.revokeRefreshTokens();
-  await assert.rejects(refresh(tokens, { fetch: vw.fetch }), VwAuthError);
-});
-
-test('form, script and fragment parsing', () => {
+test('form and script parsing', () => {
   const form = parseForm(
     '<form id="other"></form><form id="emailPasswordForm" action="/a?x=1&amp;y=2"><input name="hmac" value="h&#39;1"><input name="email"></form>',
     'emailPasswordForm',
@@ -84,34 +79,25 @@ test('form, script and fragment parsing', () => {
   assert.equal(parseForm('<html></html>', 'emailPasswordForm'), undefined);
 
   const template = parseTemplateModel(
-    '<script>\n  templateModel: {"hmac":"h","postAction":"p"},\n  csrf_token: \'c\',\n</script>',
+    '<script>\n  templateModel: {"hmac":"h","nested":{"a":"}"}},\n  csrf_token: \'c\',\n</script>',
   );
-  assert.deepEqual(template, { model: { hmac: 'h', postAction: 'p' }, csrf: 'c' });
-
-  assert.deepEqual(parseAppRedirect('weconnect://authenticated#state=s&code=c'), {
-    state: 's',
-    code: 'c',
-  });
+  assert.deepEqual(template, { model: { hmac: 'h', nested: { a: '}' } }, csrf: 'c' });
   assert.equal(decodeEntities('&lt;a&gt; &#x41;'), '<a> A');
 });
 
-test('token responses are normalized from camelCase and snake_case', () => {
-  const now = 1_000_000;
-  assert.deepEqual(
-    normalizeTokens({ accessToken: 'a', refreshToken: 'r', idToken: 'i' }, {}, now),
-    {
-      accessToken: 'a',
-      refreshToken: 'r',
-      idToken: 'i',
-      expiresAt: now + 3600 * 1000,
-    },
-  );
-  assert.equal(
-    normalizeTokens({ access_token: 'b', expires_in: 60 }, { refreshToken: 'r' }, now).expiresAt,
-    now + 60_000,
-  );
-  assert.throws(() => normalizeTokens({}), /no access token/);
-  assert.equal(isFresh({ accessToken: 'a', expiresAt: now + 30_000 }, now), false);
+test('landing page and marketing callback detection', () => {
+  const portal = 'https://eu-data-act.drivesomethinggreater.com';
+  assert.equal(isPortalLandingPage(`${portal}/de/en/user.html`), true);
+  assert.equal(isPortalLandingPage(`${portal}/content/euda/fr/fr/user.html`), true);
+  assert.equal(isPortalLandingPage(`${portal}/login`), false);
+
+  const callback = 'https://identity.vwgroup.io/oidc/v1/oauth/client/callback?a=1';
+  const page = `https://identity.vwgroup.io/signin-service/v1/consent/marketing/x?callback=${encodeURIComponent(callback)}`;
+  assert.equal(marketingConsentCallback(page), callback);
+  // A callback elsewhere than on the identity provider is refused.
+  const evil = `https://identity.vwgroup.io/signin-service/v1/consent/marketing/x?callback=${encodeURIComponent('https://evil.example/oidc/v1/oauth/client/callback')}`;
+  assert.equal(marketingConsentCallback(evil), undefined);
+  assert.equal(marketingConsentCallback(`${portal}/login`), undefined);
 });
 
 test('the cookie jar honors domains and expiries', () => {
@@ -123,6 +109,7 @@ test('the cookie jar honors domains and expiries', () => {
   assert.equal(jar.header('https://identity.vwgroup.io/y'), 'a=1; b=2');
   assert.equal(jar.header('https://other.vwgroup.io/'), 'b=2');
   assert.equal(jar.header('https://example.com/'), undefined);
+  assert.equal(jar.value('b', 'https://identity.vwgroup.io/'), '2');
 
   const expire = new Headers();
   expire.append('set-cookie', 'a=; Max-Age=0');

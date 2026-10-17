@@ -2,14 +2,13 @@
 // HTTPS transport with a `fetch`-like interface, built on node:https.
 //
 // Why not the global `fetch`: Node's fetch (undici) adds headers of its own to
-// every request (`sec-fetch-mode: cors`, `accept-language: *`...). The
-// Volkswagen front door rejects requests that do not look like its Android
-// app (HTTP 403 on the very first sign-in call), so this transport sends
-// exactly the headers the caller gives, like the reference Python clients.
+// every request (`sec-fetch-mode: cors`, `accept-language: *`...), and the
+// Volkswagen sites sit behind firewalls that judge requests on their headers.
+// This transport sends exactly the headers the caller gives.
 //
 // Only what the client uses is implemented: `status`, `headers` (a standard
-// Headers object, so `getSetCookie()` works), `text()` and `json()`. No
-// redirect is ever followed: callers follow them by hand.
+// Headers object, so `getSetCookie()` works), `text()`, `json()` and
+// `arrayBuffer()`. No redirect is ever followed: callers follow them by hand.
 // -----------------------------------------------------------------------------
 
 import http from 'node:http';
@@ -78,6 +77,8 @@ export function httpsFetch(url, { method = 'GET', headers = {}, body, signal } =
             headers: toHeaders(response.rawHeaders),
             text: async () => text,
             json: async () => JSON.parse(text),
+            arrayBuffer: async () =>
+              content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength),
           });
         });
       },
