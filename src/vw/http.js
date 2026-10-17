@@ -8,6 +8,8 @@
 // hand, the cookies carried from hop to hop.
 // -----------------------------------------------------------------------------
 
+import { httpsFetch } from './transport.js';
+
 /**
  * A deliberately small cookie jar: name/value per domain, no path or expiry
  * handling (the sign-in lasts a few seconds and is thrown away afterwards).
@@ -91,7 +93,7 @@ export function resolveLocation(location, base) {
  * headers of the Volkswagen Android app web view.
  */
 export class WebSession {
-  constructor({ fetch: fetchImpl = globalThis.fetch, headers = {}, timeoutMs = 30_000 } = {}) {
+  constructor({ fetch: fetchImpl = httpsFetch, headers = {}, timeoutMs = 30_000 } = {}) {
     this.fetch = fetchImpl;
     this.jar = new CookieJar();
     this.headers = headers;
@@ -100,10 +102,11 @@ export class WebSession {
 
   /**
    * One request, never following redirects. `form` is sent url-encoded,
-   * `json` as JSON. Resolves the raw Response (status, headers, body).
+   * `json` as JSON; `plain` drops the session's default headers. Resolves the raw Response (status, headers, body).
    */
-  async request(method, url, { form, json, headers = {} } = {}) {
-    const finalHeaders = { ...this.headers, ...headers };
+  async request(method, url, { form, json, headers = {}, plain = false } = {}) {
+    // `plain`: send only the given headers, not the web view defaults.
+    const finalHeaders = { ...(plain ? {} : this.headers), ...headers };
     const cookie = this.jar.header(url);
     if (cookie) {
       finalHeaders.cookie = cookie;

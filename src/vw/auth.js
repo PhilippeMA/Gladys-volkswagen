@@ -16,8 +16,9 @@
 // side is fixed in one place.
 // -----------------------------------------------------------------------------
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { WebSession, hostOf, isAppRedirect, resolveLocation } from './http.js';
+import { httpsFetch } from './transport.js';
 
 export const CLIENT_ID = 'a24fba63-34b3-4d43-b181-942111e6bda8@apps_vw-dilab_com';
 export const REDIRECT_URI = 'weconnect://authenticated';
@@ -31,6 +32,27 @@ const REFRESH_TOKEN_URL = `${BFF_URL}/login/v1/idk/token`;
 export const APP_USER_AGENT = 'Volkswagen/3.51.1-android/14';
 const APP_PACKAGE = 'com.volkswagen.weconnect';
 
+// Headers of the app's calls to the CARIAD backend (the reference clients send
+// exactly these). The backend's front door answers 403 to requests that do
+// not carry them — browser-like headers included.
+export const BFF_HEADERS = {
+  accept: '*/*',
+  'content-type': 'application/json',
+  'content-version': '1',
+  'x-newrelic-id': 'VgAEWV9QDRAEXFlRAAYPUA==',
+  'user-agent': APP_USER_AGENT,
+  'accept-language': 'de-de',
+  'cache-control': 'no-cache',
+  pragma: 'no-cache',
+  'x-android-package-name': APP_PACKAGE,
+};
+
+/** Fresh `weconnect-trace-id`, sent by the app with every backend call. */
+export function traceId() {
+  return randomUUID().toUpperCase();
+}
+
+// Headers of the app's web view, for the identity provider pages.
 const WEB_HEADERS = {
   'user-agent': APP_USER_AGENT,
   accept:
@@ -75,6 +97,15 @@ const THROTTLED = {
   en: 'Too many sign-in attempts: Volkswagen blocks the account for a few minutes.',
   fr: 'Trop de tentatives de connexion : Volkswagen bloque le compte quelques minutes.',
 };
+
+/**
+ * "HTTP 403, server AkamaiGHost": enough to tell a refused request from a
+ * Volkswagen outage in the logs, without logging any body or token.
+ */
+export function describeFailure(response) {
+  const server = response.headers.get('server');
+  return `HTTP ${response.status}${server ? `, server ${server}` : ''}`;
+}
 
 // --- HTML parsing (no dependency: the pages are small and stable enough) -----
 
@@ -199,7 +230,7 @@ export function isFresh(tokens, now = Date.now()) {
  * Run the complete sign-in with the account email and password. Resolves the
  * normalized tokens. Throws VwAuthError when the account itself is refused.
  */
-export async function login({ email, password, fetch: fetchImpl = globalThis.fetch, logger }) {
+export async function login({ email, password, fetch: fetchImpl = httpsFetch, logger }) {
   if (!email || !password) {
     throw new VwAuthError('missing credentials', {
       en: 'Enter the email address and the password of your Volkswagen account.',
@@ -213,10 +244,13 @@ export async function login({ email, password, fetch: fetchImpl = globalThis.fet
   const start = new URL(AUTHORIZE_URL);
   start.searchParams.set('redirect_uri', REDIRECT_URI);
   start.searchParams.set('nonce', nonce);
-  const startResponse = await web.request('GET', start.toString());
+  const startResponse = await web.request('GET', start.toString(), {
+    plain: true,
+    headers: { ...BFF_HEADERS, 'weconnect-trace-id': traceId() },
+  });
   const authorizeLocation = startResponse.headers.get('location');
   if (startResponse.status < 300 || startResponse.status >= 400 || !authorizeLocation) {
-    throw new Error(`Volkswagen authorization URL unavailable (HTTP ${startResponse.status})`);
+    throw new Error(`Volkswagen authorization URL unavailable (${describeFailure(startResponse)})`);
   }
 
   // 2. Reach the login page.
@@ -244,7 +278,8 @@ export async function login({ email, password, fetch: fetchImpl = globalThis.fet
     }
   }
   const tokenResponse = await web.request('POST', LOGIN_TOKEN_URL, {
-    headers: { accept: 'application/json', 'content-version': '1' },
+    plain: true,
+    headers: { ...BFF_HEADERS, accept: 'application/json', 'weconnect-trace-id': traceId() },
     json: {
       state: params.state,
       id_token: params.id_token,
@@ -255,7 +290,7 @@ export async function login({ email, password, fetch: fetchImpl = globalThis.fet
     },
   });
   if (tokenResponse.status !== 200) {
-    throw new Error(`Volkswagen token exchange failed (HTTP ${tokenResponse.status})`);
+    throw new Error(`Volkswagen token exchange failed (${describeFailure(tokenResponse)})`);
   }
   logger?.info('Signed in to the Volkswagen account');
   return normalizeTokens(await tokenResponse.json());
@@ -364,7 +399,7 @@ async function followToApp(web, url) {
  * token is kept when the response carries none). Throws VwAuthError when the
  * refresh token is refused, so the caller signs in again.
  */
-export async function refresh(tokens, { fetch: fetchImpl = globalThis.fetch } = {}) {
+export async function refresh(tokens, { fetch: fetchImpl = httpsFetch } = {}) {
   if (!tokens?.refreshToken) {
     throw new VwAuthError('no refresh token');
   }

@@ -9,9 +9,9 @@
 // Volkswagen, never the network.
 // -----------------------------------------------------------------------------
 
-import { randomUUID } from 'node:crypto';
 import { createLogger } from '@gladysassistant/integration-sdk';
-import { APP_USER_AGENT, BFF_URL, VwAuthError, isFresh, login, refresh } from './auth.js';
+import { BFF_HEADERS, BFF_URL, VwAuthError, isFresh, login, refresh, traceId } from './auth.js';
+import { httpsFetch } from './transport.js';
 import { createMemoryTokenStore } from './tokenStore.js';
 
 const logger = createLogger({ name: 'vw-api' });
@@ -32,15 +32,6 @@ export const STATUS_JOBS = [
   'vehicleHealthInspection',
 ];
 
-const API_HEADERS = {
-  accept: 'application/json',
-  'content-version': '1',
-  'x-newrelic-id': 'VgAEWV9QDRAEXFlRAAYPUA==',
-  'user-agent': APP_USER_AGENT,
-  'accept-language': 'en-US',
-  'x-android-package-name': 'com.volkswagen.weconnect',
-};
-
 /** A non-2xx answer of the API. `status` is the HTTP status. */
 export class VwApiError extends Error {
   constructor(message, status) {
@@ -54,7 +45,7 @@ export class VwClient {
   constructor({
     email,
     password,
-    fetch: fetchImpl = globalThis.fetch,
+    fetch: fetchImpl = httpsFetch,
     tokenStore = createMemoryTokenStore(),
     now = () => Date.now(),
   }) {
@@ -154,13 +145,10 @@ export class VwClient {
 
   #send(method, path, body, token) {
     const headers = {
-      ...API_HEADERS,
+      ...BFF_HEADERS,
       authorization: `Bearer ${token}`,
-      'weconnect-trace-id': randomUUID().toUpperCase(),
+      'weconnect-trace-id': traceId(),
     };
-    if (body !== undefined) {
-      headers['content-type'] = 'application/json';
-    }
     return this.fetch(`${BFF_URL}${path}`, {
       method,
       headers,

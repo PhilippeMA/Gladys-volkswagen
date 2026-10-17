@@ -211,3 +211,21 @@ test('new credentials start a new session', async () => {
   assert.equal(service.configure({ ...config, email: 'other@example.com' }), true);
   assert.equal(service.vehicles.length, 0);
 });
+
+test('an unreachable account is shown in the Configuration screen too', async () => {
+  const gladys = createFakeGladys();
+  const service = new VehicleService(gladys, {
+    createClient: (c) =>
+      new VwClient({
+        email: c.email,
+        password: c.password,
+        fetch: async () => {
+          throw new Error('getaddrinfo ENOTFOUND emea.bff.cariad.digital');
+        },
+      }),
+  });
+  service.configure(config);
+  await assert.rejects(service.loadVehicles());
+  assert.equal(gladys.fake.connectionStatus.connected, false);
+  assert.match(gladys.fake.connectionStatus.message.en, /ENOTFOUND/);
+});

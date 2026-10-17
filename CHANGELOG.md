@@ -24,4 +24,12 @@ the notes of the version's GitHub Release.
 - "Volkswagen ID." dashboard widget.
 - "Test the connection" and "Wake up a car" actions.
 
+### Fixed
+
+- The sign-in failed with "Volkswagen authorization URL unavailable (HTTP
+  403)": the first calls to Volkswagen now carry the headers of the
+  Volkswagen app, and nothing else.
+- A failed sign-in or an unreachable Volkswagen now shows in the
+  Configuration screen, and saving the configuration again retries.
+
 [Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/commits/main

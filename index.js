@@ -87,8 +87,11 @@ for (const [widgetKey, widget] of Object.entries(WIDGETS)) {
 gladys.onConfigUpdated(async (newConfig) => {
   logger.info('onConfigUpdated -> new configuration received');
   // New credentials start a new Volkswagen session; a new refresh interval
-  // or S-PIN applies from the next poll.
-  if (service.configure(normalizeConfig(newConfig))) {
+  // or S-PIN applies from the next poll. Saving again after a failure
+  // retries the listing (the client still spaces out refused sign-ins).
+  const credentialsChanged = service.configure(normalizeConfig(newConfig));
+  if (credentialsChanged || !service.vehiclesLoaded) {
+    service.forgetConnectionStatus();
     await publishVehicles();
   }
 });

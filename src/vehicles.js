@@ -40,6 +40,15 @@ const NOT_CONFIGURED = {
   fr: 'Renseignez l’adresse e-mail et le mot de passe de votre compte Volkswagen.',
 };
 
+function unreachable(err) {
+  // Gladys caps the status message: keep the cause short.
+  const cause = String(err.message).slice(0, 120);
+  return {
+    en: `Cannot reach the Volkswagen account: ${cause}`,
+    fr: `Impossible de joindre le compte Volkswagen : ${cause}`,
+  };
+}
+
 /** A command the user cannot run as is: the message is shown in Gladys. */
 export class CommandError extends Error {}
 
@@ -120,8 +129,15 @@ export class VehicleService {
     } catch (err) {
       if (err instanceof VwAuthError) {
         await this.reportConnection(false, err.userMessage);
-      } else if (err instanceof VwApiError && err.status === 429) {
-        logger.warn('Volkswagen rate limit reached: slow down the refresh interval');
+      } else if (err instanceof VwApiError) {
+        // The account works, one call failed (car asleep, rate limit...).
+        if (err.status === 429) {
+          logger.warn('Volkswagen rate limit reached: slow down the refresh interval');
+        }
+      } else {
+        // Sign-in refused by the front door, network down...: the account
+        // is unusable, say so in the Configuration screen too.
+        await this.reportConnection(false, unreachable(err));
       }
       throw err;
     }

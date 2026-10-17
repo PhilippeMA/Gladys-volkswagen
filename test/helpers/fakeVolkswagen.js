@@ -209,6 +209,14 @@ export function createFakeVolkswagen({
       url.origin === 'https://emea.bff.cariad.digital' &&
       url.pathname === '/user-login/v1/authorize'
     ) {
+      // Like the real front door: a request that does not look like the
+      // app's backend call (browser headers, missing app headers) is a 403.
+      if (!looksLikeTheApp(headers)) {
+        return reply(403, {
+          headers: { server: 'AkamaiGHost' },
+          body: '<html>Access Denied</html>',
+        });
+      }
       pendingNonce = url.searchParams.get('nonce');
       pendingState = `state-${vw.logins + 1}`;
       return reply(303, {
@@ -325,6 +333,9 @@ window._IDK = {
 
     // --- CARIAD backend ----------------------------------------------------
     if (url.pathname === '/user-login/login/v1') {
+      if (!looksLikeTheApp(headers)) {
+        return reply(403);
+      }
       const payload = JSON.parse(body);
       if (payload.authorizationCode !== 'auth-code' || payload.state !== pendingState) {
         return reply(400);
@@ -385,6 +396,17 @@ window._IDK = {
     return handle(url, init);
   };
   return vw;
+}
+
+function looksLikeTheApp(headers) {
+  return (
+    headers.get('x-newrelic-id') === 'VgAEWV9QDRAEXFlRAAYPUA==' &&
+    headers.get('x-android-package-name') === 'com.volkswagen.weconnect' &&
+    /^Volkswagen\//.test(headers.get('user-agent') ?? '') &&
+    Boolean(headers.get('weconnect-trace-id')) &&
+    !headers.has('sec-fetch-mode') &&
+    !headers.has('upgrade-insecure-requests')
+  );
 }
 
 function assertCookie(headers, expected) {
