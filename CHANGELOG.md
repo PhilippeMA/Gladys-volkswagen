@@ -10,6 +10,10 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Fixed
+
+- The widgets show the battery level with its "%" unit.
+
 ## [1.1.0] - 2026-10-19
 
 ### Added

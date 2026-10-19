@@ -52,6 +52,15 @@ for (const widgetKey of [VEHICLE_STATUS_WIDGET, VEHICLE_PICTURE_WIDGET]) {
   }
 }
 
+test('both widgets show the battery level with its % unit', async () => {
+  for (const widgetKey of [VEHICLE_STATUS_WIDGET, VEHICLE_PICTURE_WIDGET]) {
+    const { getContent } = await setup(sampleDataset(), { widgetKey });
+    const gauge = (await getContent()).components.find((c) => c.type === 'gauge');
+    assert.equal(gauge.unit, '%', widgetKey);
+    assert.match(gauge.device_feature, /:battery-level$/, 'still live');
+  }
+});
+
 test('the picture widget shows the portal picture of the car, served by its key', async () => {
   const { service, getContent } = await setup(sampleDataset(), {
     widgetKey: VEHICLE_PICTURE_WIDGET,

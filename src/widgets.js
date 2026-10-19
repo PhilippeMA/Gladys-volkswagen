@@ -145,7 +145,15 @@ function liveTiles(gladys, service, vehicle) {
   const range = featureOf(gladys, service, vehicle, 'range');
   return [
     ...(battery
-      ? [{ type: 'gauge', label: text('Battery', 'Batterie'), device_feature: battery }]
+      ? [
+          // The core does not take the unit from the feature: give it here.
+          {
+            type: 'gauge',
+            label: text('Battery', 'Batterie'),
+            device_feature: battery,
+            unit: '%',
+          },
+        ]
       : []),
     ...(range
       ? [
