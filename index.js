@@ -72,6 +72,13 @@ for (const [widgetKey, widget] of Object.entries(WIDGETS)) {
   );
 }
 
+// One handler for every image key the contents declare: the car pictures.
+gladys.onWidgetGetImage((imageKey) => service.pictureByKey(imageKey));
+
+// The widgets show the name the user gave the device: follow its changes.
+gladys.onDeviceCreated(async () => refreshWidgets(gladys));
+gladys.onDeviceUpdated(async () => refreshWidgets(gladys));
+
 // --- Configuration updated by the user ---------------------------------------
 gladys.onConfigUpdated(async (newConfig) => {
   logger.info('onConfigUpdated -> new configuration received');

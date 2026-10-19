@@ -10,6 +10,17 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Added
+
+- "Volkswagen ID. picture" dashboard widget: the car around the picture
+  Volkswagen holds for it (its own model and colour), with its battery, range
+  and charge. No generic image when Volkswagen has none.
+
+### Changed
+
+- The widgets show the name given to the car in Gladys, instead of the
+  nickname of the Volkswagen app.
+
 ## [1.0.1] - 2026-10-19
 
 ### Added

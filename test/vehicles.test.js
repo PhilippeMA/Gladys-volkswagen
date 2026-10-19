@@ -7,7 +7,7 @@ import { createActions } from '../src/actions.js';
 import { CHARGING_COMPLETED_TRIGGER, FEATURES, vehicleIds } from '../src/devices/vehicle.js';
 import { VehicleService, isChargeCompletion } from '../src/vehicles.js';
 import { VwClient } from '../src/vw/client.js';
-import { VIN, createFakeVolkswagen, sampleDataset } from './helpers/fakeVolkswagen.js';
+import { CAR_PNG, VIN, createFakeVolkswagen, sampleDataset } from './helpers/fakeVolkswagen.js';
 
 const config = normalizeConfig({ email: 'driver@example.com', password: 'secret-password' });
 
@@ -204,4 +204,51 @@ test('new credentials start a new session', async () => {
   assert.equal(service.vehicles.length, 1, 'same account: the cars are kept');
   assert.equal(service.configure({ ...config, email: 'other@example.com' }), true);
   assert.equal(service.vehicles.length, 0);
+});
+
+test('the name shown is the one given to the device in Gladys', async () => {
+  const vw = createFakeVolkswagen();
+  const gladys = createFakeGladys();
+  const externalId = vehicleIds(gladys, VIN).device;
+  gladys.fake.devices.push({ external_id: externalId, name: 'Voiture de Philippe', features: [] });
+  await gladys.connect();
+  const service = new VehicleService(gladys, {
+    createClient: (c) => new VwClient({ email: c.email, password: c.password, fetch: vw.fetch }),
+  });
+  service.configure(config);
+  const [vehicle] = await service.loadVehicles();
+  assert.equal(service.displayName(vehicle), 'Voiture de Philippe');
+
+  await gladys.fake.deviceUpdated({ external_id: externalId, name: '  ', features: [] });
+  assert.equal(service.displayName(vehicle), 'Ma ID.3', 'the app nickname until named');
+});
+
+test('the car picture is downloaded once, and served by its key', async () => {
+  const { vw, service } = await setup();
+  const [vehicle] = service.vehicles;
+  const picture = await service.vehiclePicture(vehicle);
+  assert.match(picture.key, /^vw-[0-9a-f]{24}$/);
+  assert.equal(await service.pictureByKey(picture.key), CAR_PNG.toString('base64'));
+  await service.vehiclePicture(vehicle);
+  assert.equal(vw.count('/front_left.png'), 1);
+  await assert.rejects(service.pictureByKey('vw-unknown'), /Unknown picture/);
+});
+
+test('a picture unfit for a widget is left out, and retried an hour later', async () => {
+  const vw = createFakeVolkswagen({ carImage: Buffer.from('<html>not an image</html>') });
+  const { service, clock } = await setup({ vw });
+  const [vehicle] = service.vehicles;
+  assert.equal(await service.vehiclePicture(vehicle), undefined);
+  assert.equal(await service.vehiclePicture(vehicle), undefined);
+  assert.equal(vw.count('/front_left.png'), 1, 'not on every dashboard refresh');
+  vw.carImage = CAR_PNG;
+  clock.now += 61 * 60 * 1000;
+  assert.ok(await service.vehiclePicture(vehicle));
+});
+
+test('a car without picture on the portal has none', async () => {
+  const vw = createFakeVolkswagen({ vehicles: [{ vin: VIN, nickName: 'Ma ID.3' }] });
+  const { service } = await setup({ vw });
+  assert.equal(await service.vehiclePicture(service.vehicles[0]), undefined);
+  assert.equal(vw.count('.png'), 0);
 });

@@ -4,7 +4,14 @@ import zlib from 'node:zlib';
 import { VwAuthError } from '../src/vw/auth.js';
 import { NoDataRequestError, VwClient } from '../src/vw/client.js';
 import { readJsonFromZip } from '../src/vw/zip.js';
-import { VIN, createFakeVolkswagen, sampleDataset, zipJson } from './helpers/fakeVolkswagen.js';
+import {
+  CAR_IMAGE_PATH,
+  CAR_PNG,
+  VIN,
+  createFakeVolkswagen,
+  sampleDataset,
+  zipJson,
+} from './helpers/fakeVolkswagen.js';
 
 const credentials = { email: 'driver@example.com', password: 'secret-password' };
 
@@ -12,7 +19,14 @@ test('lists the cars linked to the portal, signing in once', async () => {
   const vw = createFakeVolkswagen();
   const client = new VwClient({ ...credentials, fetch: vw.fetch });
   const [vehicles] = await Promise.all([client.getVehicles(), client.getVehicles()]);
-  assert.deepEqual(vehicles, [{ vin: VIN, nickname: 'Ma ID.3', model: 'ID.3' }]);
+  assert.deepEqual(vehicles, [
+    {
+      vin: VIN,
+      nickname: 'Ma ID.3',
+      model: 'ID.3',
+      image: `https://eu-data-act.drivesomethinggreater.com${CAR_IMAGE_PATH}`,
+    },
+  ]);
   assert.equal(vw.logins, 1, 'concurrent calls share one sign-in');
 });
 
@@ -89,4 +103,15 @@ test('the ZIP reader handles deflated and stored entries', () => {
   ]);
   assert.deepEqual(readJsonFromZip(archive), { ok: true });
   assert.throws(() => readJsonFromZip(Buffer.from('not a zip')), /No JSON/);
+});
+
+test('downloads the picture of the car with the portal session', async () => {
+  const vw = createFakeVolkswagen();
+  const client = new VwClient({ ...credentials, fetch: vw.fetch });
+  const [vehicle] = await client.getVehicles();
+  const { body } = await client.getVehicleImage(vehicle.image);
+  assert.deepEqual(body, CAR_PNG);
+  // A portal path works too; plain http is refused.
+  assert.deepEqual((await client.getVehicleImage(CAR_IMAGE_PATH)).body, CAR_PNG);
+  await assert.rejects(client.getVehicleImage('http://example.com/car.png'), /https/);
 });

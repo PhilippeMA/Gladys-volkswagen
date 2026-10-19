@@ -14,7 +14,8 @@ with the SDK
   charging power, cable plugged, charge limit, remaining charging time,
   outside temperature, odometer, doors/windows open, locks.
 - **Scene trigger** — `charging_completed`, when a charge reaches its limit.
-- **Dashboard widget** — `vehicle_status`, one car at a glance.
+- **Dashboard widgets** — `vehicle_status`, one car at a glance, and
+  `vehicle_picture`, the same around the portal's picture of the car.
 - **Action** — test the connection.
 
 User documentation: [English](docs/en.md) · [Français](docs/fr.md).

@@ -1,19 +1,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateWidgetContent } from '@gladysassistant/integration-sdk';
+import { validateWidgetContent, validateWidgetImage } from '@gladysassistant/integration-sdk';
 import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
 import { normalizeConfig } from '../src/config.js';
 import { VehicleService } from '../src/vehicles.js';
 import { VwClient } from '../src/vw/client.js';
-import { VEHICLE_STATUS_WIDGET, WIDGETS, refreshWidgets } from '../src/widgets.js';
-import { createFakeVolkswagen, sampleDataset } from './helpers/fakeVolkswagen.js';
+import {
+  VEHICLE_PICTURE_WIDGET,
+  VEHICLE_STATUS_WIDGET,
+  WIDGETS,
+  refreshWidgets,
+} from '../src/widgets.js';
+import { VIN, createFakeVolkswagen, sampleDataset } from './helpers/fakeVolkswagen.js';
 
 const widget = WIDGETS[VEHICLE_STATUS_WIDGET];
 const config = normalizeConfig({ email: 'driver@example.com', password: 'secret-password' });
 
-async function setup(content, { read = true } = {}) {
+async function setup(content, { read = true, widgetKey = VEHICLE_STATUS_WIDGET, ...fake } = {}) {
   const vw = createFakeVolkswagen({
     datasets: [{ name: 'a.zip', createdOn: '2026-10-17T08:00:00Z', content }],
+    ...fake,
   });
   const gladys = createFakeGladys();
   const service = new VehicleService(gladys, {
@@ -25,21 +31,58 @@ async function setup(content, { read = true } = {}) {
     await service.refreshStatus(service.vehicles[0]);
   }
   const getContent = (settings = {}) =>
-    widget.get(gladys, { settings, language: 'en', units: 'metric', service });
+    WIDGETS[widgetKey].get(gladys, { settings, language: 'en', units: 'metric', service });
   return { vw, gladys, service, getContent };
 }
 
-for (const [label, content, read] of [
-  ['idle', sampleDataset(), true],
-  ['charging', sampleDataset({ chargeState: 'CHARGE_STATE_CHARGING_HV_BATTERY' }), true],
-  ['open door', sampleDataset({ doorOpen: true, locked: false, plug: 'disconnected' }), true],
-  ['not yet read', sampleDataset(), false],
-]) {
-  test(`the ${label} content is rendered exactly as sent`, async () => {
-    const { getContent } = await setup(content, { read });
-    assert.deepEqual(validateWidgetContent(await getContent()), []);
-  });
+const noPicture = { vehicles: [{ vin: VIN, nickName: 'Ma ID.3' }] };
+for (const widgetKey of [VEHICLE_STATUS_WIDGET, VEHICLE_PICTURE_WIDGET]) {
+  for (const [label, content, options] of [
+    ['idle', sampleDataset(), {}],
+    ['charging', sampleDataset({ chargeState: 'CHARGE_STATE_CHARGING_HV_BATTERY' }), {}],
+    ['open door', sampleDataset({ doorOpen: true, locked: false, plug: 'disconnected' }), {}],
+    ['not yet read', sampleDataset(), { read: false }],
+    ['no picture', sampleDataset(), noPicture],
+    ['no picture, not yet read', sampleDataset(), { ...noPicture, read: false }],
+  ]) {
+    test(`${widgetKey}: the ${label} content is rendered exactly as sent`, async () => {
+      const { getContent } = await setup(content, { ...options, widgetKey });
+      assert.deepEqual(validateWidgetContent(await getContent()), []);
+    });
+  }
 }
+
+test('the picture widget shows the portal picture of the car, served by its key', async () => {
+  const { service, getContent } = await setup(sampleDataset(), {
+    widgetKey: VEHICLE_PICTURE_WIDGET,
+  });
+  const image = (await getContent()).components.find((c) => c.type === 'image');
+  assert.ok(image, 'an image component');
+  const base64 = await service.pictureByKey(image.key);
+  assert.deepEqual(validateWidgetImage(base64), [], 'an image the core accepts');
+});
+
+test('without a portal picture, no generic image is shown', async () => {
+  const { getContent } = await setup(sampleDataset(), {
+    widgetKey: VEHICLE_PICTURE_WIDGET,
+    ...noPicture,
+  });
+  const content = await getContent();
+  assert.equal(content.components.filter((c) => c.type === 'image').length, 0);
+  assert.ok(content.components.some((c) => /no picture/.test(c.text?.en ?? '')));
+});
+
+test('both widgets show the name given to the device in Gladys', async () => {
+  for (const widgetKey of [VEHICLE_STATUS_WIDGET, VEHICLE_PICTURE_WIDGET]) {
+    const { gladys, getContent } = await setup(sampleDataset(), { widgetKey });
+    await gladys.fake.deviceCreated({
+      external_id: `ext:test-integration:vehicle:${VIN}`,
+      name: 'Voiture de Philippe',
+      features: [],
+    });
+    assert.equal((await getContent()).components[0].text, 'Voiture de Philippe', widgetKey);
+  }
+});
 
 test('the tiles are bound to the published features, without controls', async () => {
   const { service, getContent } = await setup(sampleDataset());

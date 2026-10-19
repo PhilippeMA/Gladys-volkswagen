@@ -91,6 +91,14 @@ et l'autonomie, ainsi que l'état de la charge, du câble, du verrouillage et
 des ouvrants. Le bouton **Actualiser** vérifie tout de suite si Volkswagen a
 publié de nouvelles données.
 
+Le widget **Volkswagen ID. en image** montre les mêmes informations autour
+de l'image de votre voiture fournie par Volkswagen : votre modèle, dans sa
+couleur. Si Volkswagen ne fournit pas d'image pour votre voiture, le widget
+le signale au lieu d'afficher une image générique.
+
+Les deux widgets affichent le nom que vous avez donné à la voiture en
+l'ajoutant dans Gladys (à défaut, son surnom dans l'application Volkswagen).
+
 ## Dépannage
 
 - **« Connexion Volkswagen refusée »** — vérifiez l'adresse e-mail et le mot

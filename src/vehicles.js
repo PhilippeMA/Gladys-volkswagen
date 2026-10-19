@@ -10,7 +10,8 @@
 // the SDK handlers to it.
 // -----------------------------------------------------------------------------
 
-import { createLogger } from '@gladysassistant/integration-sdk';
+import { createHash } from 'node:crypto';
+import { createLogger, validateWidgetImage } from '@gladysassistant/integration-sdk';
 import { hasCredentials } from './config.js';
 import { createPollScheduler } from './devices/index.js';
 import {
@@ -34,6 +35,9 @@ const STATE_HEARTBEAT_MS = 30 * 60 * 1000;
 const MAX_BACKFILL = 4;
 // Room left for the points of one dataset in the merge order (see parseDataset).
 const DATASET_SEQ_SPAN = 1_000_000;
+// A car picture that could not be fetched (or is too large for a widget) is
+// tried again after this delay, not on every dashboard refresh.
+const PICTURE_RETRY_MS = 60 * 60 * 1000;
 
 const NOT_CONFIGURED = MESSAGES.missingCredentials;
 
@@ -73,6 +77,7 @@ export class VehicleService {
     this.vehiclesLoaded = false;
     this.data = new Map(); // vin -> { identifier, points, lastCreatedOn, datasets }
     this.statuses = new Map(); // vin -> flat status
+    this.pictures = new Map(); // vin -> { location, key, base64 } | { location, failedAt }
     this.scheduler = createPollScheduler(now);
     this.connection = undefined; // last reported { connected, message }
     this.onStatus = () => {};
@@ -90,6 +95,7 @@ export class VehicleService {
       this.vehiclesLoaded = false;
       this.data.clear();
       this.statuses.clear();
+      this.pictures.clear();
       this.scheduler.clear();
     }
     return credentialsChanged;
@@ -182,6 +188,64 @@ export class VehicleService {
 
   statusOf(vin) {
     return this.statuses.get(vin);
+  }
+
+  // --- Pictures ---------------------------------------------------------------
+
+  /**
+   * The portal's picture of THIS car (its model, its colour), ready for a
+   * widget: `{ key, base64 }`, or undefined when the portal has none or it
+   * cannot be served (too large, not an image...). Downloaded once per
+   * location; the key changes with the location, as the core caches an image
+   * one hour by key.
+   */
+  async vehiclePicture(vehicle) {
+    if (!vehicle?.image || !this.client) {
+      return undefined;
+    }
+    const cached = this.pictures.get(vehicle.vin);
+    if (cached?.location === vehicle.image) {
+      if (cached.base64) return cached;
+      if (this.now() - cached.failedAt < PICTURE_RETRY_MS) return undefined;
+    }
+    try {
+      const { body } = await this.client.getVehicleImage(vehicle.image);
+      const base64 = body.toString('base64');
+      const problems = validateWidgetImage(base64);
+      if (problems.length > 0) {
+        throw new Error(problems.join('; '));
+      }
+      const key = `vw-${createHash('sha256').update(vehicle.image).digest('hex').slice(0, 24)}`;
+      const picture = { location: vehicle.image, key, base64 };
+      this.pictures.set(vehicle.vin, picture);
+      return picture;
+    } catch (err) {
+      logger.warn(`${vehicleName(vehicle)}: no picture for the widget (${err.message})`);
+      this.pictures.set(vehicle.vin, { location: vehicle.image, failedAt: this.now() });
+      return undefined;
+    }
+  }
+
+  /** The raw base64 of a picture key a widget content declared (onWidgetGetImage). */
+  async pictureByKey(key) {
+    for (const vehicle of this.vehicles) {
+      const picture = await this.vehiclePicture(vehicle);
+      if (picture?.key === key) {
+        return picture.base64;
+      }
+    }
+    throw new Error(`Unknown picture ${key}`);
+  }
+
+  /**
+   * The name to show for a car: the one the user gave the device in Gladys,
+   * else the nickname of the Volkswagen app, else the model.
+   */
+  displayName(vehicle) {
+    const externalId = vehicleIds(this.gladys, vehicle.vin).device;
+    const device = (this.gladys.devices ?? []).find((d) => d.external_id === externalId);
+    const name = typeof device?.name === 'string' ? device.name.trim() : '';
+    return name || vehicleName(vehicle);
   }
 
   // --- Status -----------------------------------------------------------------

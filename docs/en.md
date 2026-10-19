@@ -82,6 +82,14 @@ of the account by default). It shows the battery and the range live, and the
 state of the charge, the cable, the locks and the openings. The **Refresh**
 button checks right away whether Volkswagen published new data.
 
+The **Volkswagen ID. picture** widget shows the same values around the
+picture Volkswagen holds for your car: your model, in its colour. When
+Volkswagen has no picture of your car, the widget says so instead of showing a
+generic image.
+
+Both widgets show the name you gave the car when adding it to Gladys (else its
+nickname in the Volkswagen app).
+
 ## Troubleshooting
 
 - **"Volkswagen sign-in refused"** — check the email address and the password

@@ -103,11 +103,12 @@ export class VwClient {
   // --- Requests -----------------------------------------------------------------
 
   /**
-   * One GET on the portal API, with the session cookies. Resolves
+   * One GET on the portal API (a path) or an absolute https URL, with the
+   * session cookies — the jar only sends them to their own sites. Resolves
    * `{ status, response, body }`; `binary` keeps the body as a Buffer.
    */
   async #get(path, headers = {}, { binary = false } = {}) {
-    const url = `${PORTAL_URL}${path}`;
+    const url = path.startsWith('https://') ? path : `${PORTAL_URL}${path}`;
     let session = await this.#session();
     let answer = await this.#send(session, url, headers, binary);
     if (sessionExpired(answer.status, answer.text)) {
@@ -146,7 +147,11 @@ export class VwClient {
 
   // --- Portal API ---------------------------------------------------------------
 
-  /** The cars linked to the portal: `[{ vin, nickname, model }]`. */
+  /**
+   * The cars linked to the portal: `[{ vin, nickname, model, image }]`.
+   * `image` is the location of the portal's picture of THIS car (its model,
+   * its colour), seen from the front left as `viewPosition` asks.
+   */
   async getVehicles() {
     const answer = await this.#get('/proxy_api/consent/me/vehicles?viewPosition=FRONT_LEFT');
     if (answer.status !== 200) {
@@ -164,9 +169,26 @@ export class VwClient {
         vin,
         nickname: entry.nickName ?? entry.vehicleNickname ?? entry.nickname ?? undefined,
         model: entry.modelName ?? undefined,
+        image: typeof entry.imageLocation === 'string' ? entry.imageLocation : undefined,
       });
     }
     return [...vehicles.values()];
+  }
+
+  /**
+   * The picture of a car, from the `image` location of getVehicles (an
+   * absolute https URL or a portal path). Resolves `{ body }` (a Buffer).
+   */
+  async getVehicleImage(location) {
+    const url = new URL(location, PORTAL_URL);
+    if (url.protocol !== 'https:') {
+      throw new VwApiError('The vehicle picture is not served over https', 0);
+    }
+    const answer = await this.#get(url.toString(), { accept: 'image/*' }, { binary: true });
+    if (answer.status !== 200) {
+      throw this.#fail('The vehicle picture', answer);
+    }
+    return { body: answer.body };
   }
 
   /** Identifier of the car's continuous data request; NoDataRequestError if none. */

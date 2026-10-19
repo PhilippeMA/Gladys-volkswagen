@@ -149,6 +149,31 @@
         }
       ],
       "action_timeout_seconds": 30
+    },
+    {
+      "key": "vehicle_picture",
+      "label": {
+        "en": "Volkswagen ID. picture",
+        "fr": "Volkswagen ID. en image"
+      },
+      "description": {
+        "en": "The picture of your car from Volkswagen, with its battery, range and charge.",
+        "fr": "L'image de votre voiture fournie par Volkswagen, avec batterie, autonomie et charge."
+      },
+      "icon": "image",
+      "settings": [
+        {
+          "key": "vehicle",
+          "type": "select",
+          "source": "devices",
+          "label": {
+            "en": "Car",
+            "fr": "Voiture"
+          },
+          "required": false
+        }
+      ],
+      "action_timeout_seconds": 30
     }
   ]
 }

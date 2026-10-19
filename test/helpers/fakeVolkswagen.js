@@ -61,6 +61,13 @@ export function sampleDataset({
 }
 
 /** A ZIP archive holding `document` as JSON (one deflated entry). */
+// A valid 1×1 PNG: the picture the fake portal holds for the car.
+export const CAR_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64',
+);
+export const CAR_IMAGE_PATH = `/media/vehicles/${VIN}/front_left.png`;
+
 export function zipJson(document, name = 'dataset.json') {
   const data = zlib.deflateRawSync(Buffer.from(JSON.stringify(document)));
   const fileName = Buffer.from(name);
@@ -94,7 +101,15 @@ const redirect = (location, cookies = []) => reply(302, { headers: { location },
 export function createFakeVolkswagen({
   email = 'driver@example.com',
   password = 'secret-password',
-  vehicles = [{ vin: VIN, nickName: 'Ma ID.3', modelName: 'ID.3' }],
+  vehicles = [
+    {
+      vin: VIN,
+      nickName: 'Ma ID.3',
+      modelName: 'ID.3',
+      imageLocation: `${PORTAL}${CAR_IMAGE_PATH}`,
+    },
+  ],
+  carImage = CAR_PNG,
   datasets = [
     {
       name: 'request_20261017T0800.zip',
@@ -114,6 +129,7 @@ export function createFakeVolkswagen({
     dataRequest,
     portalConsent,
     marketingConsent,
+    carImage,
     requests: [],
     logins: 0,
     validSessions: new Set(),
@@ -232,6 +248,12 @@ export function createFakeVolkswagen({
       const session = `session-${vw.logins}`;
       vw.validSessions.add(session);
       return redirect('/de/en/user.html', [`access_token=${session}; Path=/; Secure; HttpOnly`]);
+    }
+    if (url.origin === PORTAL && url.pathname === CAR_IMAGE_PATH) {
+      if (!vw.validSessions.has(cookies.match(/access_token=([^;]+)/)?.[1])) {
+        return reply(401);
+      }
+      return reply(200, { body: vw.carImage, headers: { 'content-type': 'image/png' } });
     }
     if (url.origin === PORTAL && url.pathname.endsWith('/user.html')) {
       throw new Error('the heavy portal landing page must not be fetched');
