@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-19
+
 ### Fixed
 
 - The widgets show the battery level with its "%" unit.
@@ -49,6 +51,7 @@ the notes of the version's GitHub Release.
 - A failed sign-in, a missing portal setup or an unreachable Volkswagen shows
   in the Configuration screen; saving the configuration again retries.
 
-[Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/PhilippeMA/Gladys-volkswagen/releases/tag/v1.0.1
