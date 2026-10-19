@@ -1,6 +1,6 @@
 {
   "name": "gladys-volkswagen",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Gladys Assistant integration for the Volkswagen ID. electric cars, through the EU Data Act portal (battery, range, charging).",
   "type": "module",

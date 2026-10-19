@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-19
+
 ### Added
 
 - Sign-in to Volkswagen's EU Data Act portal with the account of the
@@ -26,4 +28,5 @@ the notes of the version's GitHub Release.
 - A failed sign-in, a missing portal setup or an unreachable Volkswagen shows
   in the Configuration screen; saving the configuration again retries.
 
-[Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/commits/main
+[Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/PhilippeMA/Gladys-volkswagen/releases/tag/v1.0.1
