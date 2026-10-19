@@ -265,3 +265,34 @@ test('without a picture in the vehicle list, the relation one is used', async ()
   assert.ok(picture, 'found in the relation');
   assert.equal(picture.base64, CAR_PNG.toString('base64'));
 });
+
+test('the picture configured by the user wins, without any Volkswagen session', async () => {
+  const { vw, service } = await setup();
+  const asked = [];
+  service.downloadPicture = async (url) => {
+    asked.push(url);
+    return CAR_PNG;
+  };
+  service.configure({ ...config, vehicle_image_url: 'https://example.com/my-id3.png' });
+  const picture = await service.vehiclePicture(service.vehicles[0]);
+  assert.equal(picture.base64, CAR_PNG.toString('base64'));
+  assert.deepEqual(asked, ['https://example.com/my-id3.png'], 'only the address is given');
+  assert.equal(vw.count('.png'), 0, 'the portal picture is not fetched');
+  assert.equal(vw.count('/relations/'), 0);
+  await service.vehiclePicture(service.vehicles[0]);
+  assert.equal(asked.length, 1, 'downloaded once');
+
+  // A new address is fetched at once.
+  service.configure({ ...config, vehicle_image_url: 'https://example.com/other.png' });
+  await service.vehiclePicture(service.vehicles[0]);
+  assert.equal(asked.length, 2);
+  assert.equal(service.configuredPictureFailed(service.vehicles[0]), false);
+});
+
+test('a configured picture unfit for a widget is reported', async () => {
+  const { service } = await setup();
+  service.downloadPicture = async () => Buffer.alloc(400 * 1024, 1);
+  service.configure({ ...config, vehicle_image_url: 'https://example.com/huge.png' });
+  assert.equal(await service.vehiclePicture(service.vehicles[0]), undefined);
+  assert.equal(service.configuredPictureFailed(service.vehicles[0]), true);
+});

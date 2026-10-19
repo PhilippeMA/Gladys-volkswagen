@@ -70,6 +70,23 @@
       "default": 300,
       "min": 180,
       "max": 3600
+    },
+    {
+      "key": "vehicle_image_url",
+      "type": "string",
+      "label": {
+        "en": "Picture of the car (optional)",
+        "fr": "Image de la voiture (facultatif)"
+      },
+      "description": {
+        "en": "https address of a picture of your car for the picture widget (PNG, JPEG or WebP, 300 KB max). Volkswagen does not provide it to Gladys.",
+        "fr": "Adresse https d'une image de votre voiture pour le widget en image (PNG, JPEG ou WebP, 300 Ko max). Volkswagen ne la fournit pas à Gladys."
+      },
+      "placeholder": {
+        "en": "e.g. https://example.com/my-id3.png",
+        "fr": "ex. https://exemple.fr/mon-id3.png"
+      },
+      "required": false
     }
   ],
   "actions": [

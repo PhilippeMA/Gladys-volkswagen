@@ -20,6 +20,9 @@ export const DEFAULT_CONFIG = {
   // most once a minute: slower intervals are applied by skipping polls (see
   // createPollScheduler in src/devices/index.js).
   poll_frequency: 300,
+  // Optional https address of a picture of the car, for the picture widget:
+  // Volkswagen serves none to third parties.
+  vehicle_image_url: '',
 };
 
 export const MIN_POLL_FREQUENCY = 180;
@@ -37,6 +40,7 @@ export function normalizeConfig(raw = {}) {
     // Force the types: config may arrive as strings from a form.
     email: String(raw.email ?? '').trim(),
     password: String(raw.password ?? ''),
+    vehicle_image_url: String(raw.vehicle_image_url ?? '').trim(),
     poll_frequency: Number.isFinite(pollFrequency)
       ? Math.min(MAX_POLL_FREQUENCY, Math.max(MIN_POLL_FREQUENCY, pollFrequency))
       : DEFAULT_CONFIG.poll_frequency,

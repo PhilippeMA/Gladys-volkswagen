@@ -82,10 +82,25 @@ of the account by default). It shows the battery and the range live, and the
 state of the charge, the cable, the locks and the openings. The **Refresh**
 button checks right away whether Volkswagen published new data.
 
-The **Volkswagen ID. picture** widget shows the same values around the
-picture Volkswagen holds for your car: your model, in its colour. When
-Volkswagen has no picture of your car, the widget says so instead of showing a
-generic image.
+The **Volkswagen ID. picture** widget shows the same values around a picture
+of your car. Volkswagen does not provide it to Gladys: the EU Data Act portal
+has none, and the picture service of the Volkswagen app is closed to
+third-party applications. Provide it yourself:
+
+1. Take a picture of your car, for example a screenshot of the Volkswagen
+   app, cropped to the car.
+2. Reduce it to **300 KB at most**, as PNG, JPEG or WebP (Gladys refuses
+   heavier images). A width of 800 pixels is enough.
+3. Put it online at a public **https** address, for example in a GitHub
+   repository (the file's "Raw" link).
+4. Paste that address in the **Picture of the car** field of the
+   Configuration tab, then save.
+
+The integration downloads the picture once, without sending any Volkswagen
+credential there. Without an address, the widget says so instead of showing a
+generic image; when the picture cannot be shown (too heavy, address not
+found…), the widget says so and the logs give the reason. With several cars on
+the account, the same picture is used for all.
 
 Both widgets show the name you gave the car when adding it to Gladys (else its
 nickname in the Volkswagen app).

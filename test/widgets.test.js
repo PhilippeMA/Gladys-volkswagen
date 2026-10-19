@@ -11,7 +11,7 @@ import {
   WIDGETS,
   refreshWidgets,
 } from '../src/widgets.js';
-import { VIN, createFakeVolkswagen, sampleDataset } from './helpers/fakeVolkswagen.js';
+import { CAR_PNG, VIN, createFakeVolkswagen, sampleDataset } from './helpers/fakeVolkswagen.js';
 
 const widget = WIDGETS[VEHICLE_STATUS_WIDGET];
 const config = normalizeConfig({ email: 'driver@example.com', password: 'secret-password' });
@@ -78,7 +78,7 @@ test('without a portal picture, no generic image is shown', async () => {
   });
   const content = await getContent();
   assert.equal(content.components.filter((c) => c.type === 'image').length, 0);
-  assert.ok(content.components.some((c) => /no picture/.test(c.text?.en ?? '')));
+  assert.ok(content.components.some((c) => /add a picture address/.test(c.text?.en ?? '')));
 });
 
 test('both widgets show the name given to the device in Gladys', async () => {
@@ -141,4 +141,30 @@ test('refreshWidgets nudges every widget', () => {
   const fresh = createFakeGladys();
   refreshWidgets(fresh);
   assert.deepEqual(fresh.fake.widgetRefreshes, Object.keys(WIDGETS));
+});
+
+test('a configured picture is shown, and a broken one says so', async () => {
+  const { gladys, service } = await setup(sampleDataset(), {
+    widgetKey: VEHICLE_PICTURE_WIDGET,
+    ...noPicture,
+  });
+  const get = () =>
+    WIDGETS[VEHICLE_PICTURE_WIDGET].get(gladys, {
+      settings: {},
+      language: 'en',
+      units: 'metric',
+      service,
+    });
+
+  service.downloadPicture = async () => CAR_PNG;
+  service.configure({ ...config, vehicle_image_url: 'https://example.com/my-id3.png' });
+  const shown = await get();
+  assert.deepEqual(validateWidgetContent(shown), []);
+  assert.ok(shown.components.some((c) => c.type === 'image'));
+
+  service.downloadPicture = async () => Buffer.from('<html>not found</html>');
+  service.configure({ ...config, vehicle_image_url: 'https://example.com/broken.png' });
+  const broken = await get();
+  assert.deepEqual(validateWidgetContent(broken), []);
+  assert.ok(broken.components.some((c) => /configured picture/.test(c.text?.en ?? '')));
 });

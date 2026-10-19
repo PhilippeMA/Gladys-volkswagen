@@ -13,6 +13,7 @@
 import { createHash } from 'node:crypto';
 import { createLogger, validateWidgetImage } from '@gladysassistant/integration-sdk';
 import { hasCredentials } from './config.js';
+import { downloadPublicImage } from './picture.js';
 import { createPollScheduler } from './devices/index.js';
 import {
   CHARGING_COMPLETED_TRIGGER,
@@ -70,13 +71,19 @@ export class VehicleService {
    * @param {object} [options]
    * @param {(config) => VwClient} [options.createClient] builds the portal client
    * @param {() => number} [options.now] clock, for the tests
+   * @param {(url) => Promise<Buffer>} [options.downloadPicture] fetches the
+   *   picture configured by the user (public https address)
    */
-  constructor(gladys, { createClient, now = () => Date.now() } = {}) {
+  constructor(
+    gladys,
+    { createClient, now = () => Date.now(), downloadPicture = downloadPublicImage } = {},
+  ) {
     this.gladys = gladys;
     this.createClient =
       createClient ??
       ((config) => new VwClient({ email: config.email, password: config.password }));
     this.now = now;
+    this.downloadPicture = downloadPicture;
     this.config = undefined;
     this.client = undefined;
     this.vehicles = [];
@@ -201,17 +208,18 @@ export class VehicleService {
   // --- Pictures ---------------------------------------------------------------
 
   /**
-   * The portal's picture of THIS car (its model, its colour), ready for a
-   * widget: `{ key, base64 }`, or undefined when the portal has none or it
-   * cannot be served (too large, not an image...). Downloaded once per
-   * location; the key changes with the location, as the core caches an image
-   * one hour by key.
+   * The picture of a car, ready for a widget: `{ key, base64 }`, or undefined
+   * when there is none or it cannot be served (too large, not an image...).
+   * The address the user configured wins; else the portal's own picture of
+   * THIS car, if the portal ever gives one. Downloaded once per address; the
+   * key changes with the address, as the core caches an image one hour by key.
    */
   async vehiclePicture(vehicle) {
     if (!vehicle || !this.client) {
       return undefined;
     }
-    const location = vehicle.image ?? (await this.#relationPicture(vehicle));
+    const configured = this.config?.vehicle_image_url || undefined;
+    const location = configured ?? vehicle.image ?? (await this.#relationPicture(vehicle));
     if (!location) {
       return undefined;
     }
@@ -221,7 +229,10 @@ export class VehicleService {
       if (this.now() - cached.failedAt < PICTURE_RETRY_MS) return undefined;
     }
     try {
-      const { body } = await this.client.getVehicleImage(location);
+      // The configured address is public: no Volkswagen session goes there.
+      const body = configured
+        ? await this.downloadPicture(configured)
+        : (await this.client.getVehicleImage(location)).body;
       const base64 = body.toString('base64');
       const problems = validateWidgetImage(base64);
       if (problems.length > 0) {
@@ -232,10 +243,21 @@ export class VehicleService {
       this.pictures.set(vehicle.vin, picture);
       return picture;
     } catch (err) {
-      logger.warn(`${vehicleName(vehicle)}: no picture for the widget (${err.message})`);
-      this.pictures.set(vehicle.vin, { location, failedAt: this.now() });
+      logger.warn(
+        `${vehicleName(vehicle)}: no picture for the widget ` +
+          `(${configured ? 'configured address' : 'portal'}: ${err.message})`,
+      );
+      this.pictures.set(vehicle.vin, { location, failedAt: this.now(), configured: !!configured });
       return undefined;
     }
+  }
+
+  /** True when the picture the user configured could not be served. */
+  configuredPictureFailed(vehicle) {
+    const cached = this.pictures.get(vehicle.vin);
+    return Boolean(
+      cached?.configured && !cached.base64 && cached.location === this.config?.vehicle_image_url,
+    );
   }
 
   /**

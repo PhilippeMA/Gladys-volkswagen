@@ -83,13 +83,16 @@ gladys.onDeviceUpdated(async () => refreshWidgets(gladys));
 gladys.onConfigUpdated(async (newConfig) => {
   logger.info('onConfigUpdated -> new configuration received');
   // New credentials start a new Volkswagen session; a new refresh interval
-  // applies from the next poll. Saving again after a failure retries the
+  // applies from the next poll, a new picture address at the next widget
+  // refresh. Saving again after a failure retries the
   // listing (the client still spaces out refused sign-ins).
   const credentialsChanged = service.configure(normalizeConfig(newConfig));
   if (credentialsChanged || !service.vehiclesLoaded) {
     service.forgetConnectionStatus();
     await publishVehicles();
   }
+  // A new picture address changes the picture widget.
+  refreshWidgets(gladys);
 });
 
 // --- Connection lifecycle ----------------------------------------------------

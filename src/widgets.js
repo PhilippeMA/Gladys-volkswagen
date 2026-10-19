@@ -7,9 +7,9 @@
 // action is "Refresh": check the portal for new datasets now. There is no
 // control: the EU Data Act portal is read-only.
 //
-// `vehicle_picture`: the same car around the picture the portal holds for
-// it — its own model and colour, never a generic image — served through
-// onWidgetGetImage (see VehicleService.vehiclePicture).
+// `vehicle_picture`: the same car around its picture — the one the user
+// configured, else the portal's own if it ever gives one; never a generic
+// image — served through onWidgetGetImage (see VehicleService.vehiclePicture).
 //
 // Both show the name the user gave the device in Gladys.
 //
@@ -260,10 +260,15 @@ export const WIDGETS = {
         image = {
           type: 'text',
           variant: 'caption',
-          text: text(
-            'Volkswagen provides no picture of this car.',
-            'Volkswagen ne fournit pas d’image de cette voiture.',
-          ),
+          text: service.configuredPictureFailed(vehicle)
+            ? text(
+                'The configured picture cannot be shown: see the integration logs.',
+                'L’image configurée ne peut pas être affichée : voir les logs.',
+              )
+            : text(
+                'No Volkswagen picture: add a picture address in the configuration.',
+                'Pas d’image Volkswagen : ajoutez une adresse d’image dans la configuration.',
+              ),
         };
       }
       return {

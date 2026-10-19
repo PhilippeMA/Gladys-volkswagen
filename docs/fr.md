@@ -92,9 +92,24 @@ des ouvrants. Le bouton **Actualiser** vérifie tout de suite si Volkswagen a
 publié de nouvelles données.
 
 Le widget **Volkswagen ID. en image** montre les mêmes informations autour
-de l'image de votre voiture fournie par Volkswagen : votre modèle, dans sa
-couleur. Si Volkswagen ne fournit pas d'image pour votre voiture, le widget
-le signale au lieu d'afficher une image générique.
+d'une image de votre voiture. Volkswagen ne fournit pas cette image à Gladys :
+le portail EU Data Act n'en a pas, et le service d'images de l'application
+Volkswagen est fermé aux applications tierces. Fournissez-la vous-même :
+
+1. Prenez une image de votre voiture, par exemple une capture d'écran de
+   l'application Volkswagen, recadrée sur la voiture.
+2. Réduisez-la à **300 Ko au plus**, au format PNG, JPEG ou WebP (Gladys
+   refuse les images plus lourdes). Une largeur de 800 pixels suffit.
+3. Mettez-la en ligne à une adresse **https** publique, par exemple dans un
+   dépôt GitHub (lien « Raw » du fichier).
+4. Collez cette adresse dans le champ **Image de la voiture** de l'onglet
+   Configuration, puis enregistrez.
+
+L'intégration télécharge l'image une fois, sans y envoyer aucun identifiant
+Volkswagen. Sans adresse, le widget l'indique au lieu d'afficher une image
+générique ; si l'image ne peut pas être affichée (trop lourde, adresse
+introuvable…), le widget le signale et les logs donnent la raison. Avec
+plusieurs voitures sur le compte, la même image sert pour toutes.
 
 Les deux widgets affichent le nom que vous avez donné à la voiture en
 l'ajoutant dans Gladys (à défaut, son surnom dans l'application Volkswagen).

@@ -10,6 +10,12 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Added
+
+- "Picture of the car" configuration field: the https address of a picture
+  of your car (PNG, JPEG or WebP, 300 KB max) for the picture widget, since
+  Volkswagen serves none to Gladys. See the documentation.
+
 ## [1.1.1] - 2026-10-19
 
 ### Fixed

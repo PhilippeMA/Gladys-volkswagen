@@ -15,7 +15,8 @@ with the SDK
   outside temperature, odometer, doors/windows open, locks.
 - **Scene trigger** — `charging_completed`, when a charge reaches its limit.
 - **Dashboard widgets** — `vehicle_status`, one car at a glance, and
-  `vehicle_picture`, the same around the portal's picture of the car.
+  `vehicle_picture`, the same around a picture of the car the user configures
+  (Volkswagen serves none to third parties).
 - **Action** — test the connection.
 
 User documentation: [English](docs/en.md) · [Français](docs/fr.md).
