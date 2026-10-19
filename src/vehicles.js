@@ -22,7 +22,13 @@ import {
   vehicleStates,
 } from './devices/vehicle.js';
 import { MESSAGES, VwAuthError } from './vw/auth.js';
-import { NoDataRequestError, VwApiError, VwClient } from './vw/client.js';
+import {
+  NoDataRequestError,
+  VwApiError,
+  VwClient,
+  describeShape,
+  findImageLocation,
+} from './vw/client.js';
 import { mergePoints, parseDataset, statusFromPoints } from './vw/status.js';
 
 const logger = createLogger({ name: 'vehicles' });
@@ -78,6 +84,7 @@ export class VehicleService {
     this.data = new Map(); // vin -> { identifier, points, lastCreatedOn, datasets }
     this.statuses = new Map(); // vin -> flat status
     this.pictures = new Map(); // vin -> { location, key, base64 } | { location, failedAt }
+    this.relationPictures = new Map(); // vin -> { location, at }
     this.scheduler = createPollScheduler(now);
     this.connection = undefined; // last reported { connected, message }
     this.onStatus = () => {};
@@ -96,6 +103,7 @@ export class VehicleService {
       this.data.clear();
       this.statuses.clear();
       this.pictures.clear();
+      this.relationPictures.clear();
       this.scheduler.clear();
     }
     return credentialsChanged;
@@ -200,30 +208,65 @@ export class VehicleService {
    * one hour by key.
    */
   async vehiclePicture(vehicle) {
-    if (!vehicle?.image || !this.client) {
+    if (!vehicle || !this.client) {
+      return undefined;
+    }
+    const location = vehicle.image ?? (await this.#relationPicture(vehicle));
+    if (!location) {
       return undefined;
     }
     const cached = this.pictures.get(vehicle.vin);
-    if (cached?.location === vehicle.image) {
+    if (cached?.location === location) {
       if (cached.base64) return cached;
       if (this.now() - cached.failedAt < PICTURE_RETRY_MS) return undefined;
     }
     try {
-      const { body } = await this.client.getVehicleImage(vehicle.image);
+      const { body } = await this.client.getVehicleImage(location);
       const base64 = body.toString('base64');
       const problems = validateWidgetImage(base64);
       if (problems.length > 0) {
         throw new Error(problems.join('; '));
       }
-      const key = `vw-${createHash('sha256').update(vehicle.image).digest('hex').slice(0, 24)}`;
-      const picture = { location: vehicle.image, key, base64 };
+      const key = `vw-${createHash('sha256').update(location).digest('hex').slice(0, 24)}`;
+      const picture = { location, key, base64 };
       this.pictures.set(vehicle.vin, picture);
       return picture;
     } catch (err) {
       logger.warn(`${vehicleName(vehicle)}: no picture for the widget (${err.message})`);
-      this.pictures.set(vehicle.vin, { location: vehicle.image, failedAt: this.now() });
+      this.pictures.set(vehicle.vin, { location, failedAt: this.now() });
       return undefined;
     }
+  }
+
+  /**
+   * The vehicle list has no picture location: look in the car's relation,
+   * once per car and session (and at most once an hour after a failure).
+   * When none is found, log the shape of both answers — field names only —
+   * so the right field can be read in a next version.
+   */
+  async #relationPicture(vehicle) {
+    const checked = this.relationPictures.get(vehicle.vin);
+    if (checked && (checked.location || this.now() - checked.at < PICTURE_RETRY_MS)) {
+      return checked.location;
+    }
+    let location;
+    let relationShape;
+    try {
+      const relation = await this.client.getVehicleRelation(vehicle.vin);
+      location = findImageLocation(relation);
+      relationShape = describeShape(relation);
+    } catch (err) {
+      relationShape = [`(unavailable: ${err.message})`];
+    }
+    this.relationPictures.set(vehicle.vin, { location, at: this.now() });
+    if (!location) {
+      logger.info(
+        `${vehicleName(vehicle)}: the portal gives no picture location. ` +
+          `Vehicle fields: ${(vehicle.shape ?? []).join(', ') || '(none)'}. ` +
+          `Relation fields: ${relationShape.join(', ') || '(none)'}`,
+      );
+    }
+    return location;
   }
 
   /** The raw base64 of a picture key a widget content declared (onWidgetGetImage). */

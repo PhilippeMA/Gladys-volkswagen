@@ -2,7 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
 import { VwAuthError } from '../src/vw/auth.js';
-import { NoDataRequestError, VwClient } from '../src/vw/client.js';
+import {
+  NoDataRequestError,
+  VwClient,
+  describeShape,
+  findImageLocation,
+} from '../src/vw/client.js';
 import { readJsonFromZip } from '../src/vw/zip.js';
 import {
   CAR_IMAGE_PATH,
@@ -19,14 +24,12 @@ test('lists the cars linked to the portal, signing in once', async () => {
   const vw = createFakeVolkswagen();
   const client = new VwClient({ ...credentials, fetch: vw.fetch });
   const [vehicles] = await Promise.all([client.getVehicles(), client.getVehicles()]);
-  assert.deepEqual(vehicles, [
-    {
-      vin: VIN,
-      nickname: 'Ma ID.3',
-      model: 'ID.3',
-      image: `https://eu-data-act.drivesomethinggreater.com${CAR_IMAGE_PATH}`,
-    },
-  ]);
+  assert.equal(vehicles.length, 1);
+  const [vehicle] = vehicles;
+  assert.equal(vehicle.vin, VIN);
+  assert.equal(vehicle.nickname, 'Ma ID.3');
+  assert.equal(vehicle.model, 'ID.3');
+  assert.equal(vehicle.image, `https://eu-data-act.drivesomethinggreater.com${CAR_IMAGE_PATH}`);
   assert.equal(vw.logins, 1, 'concurrent calls share one sign-in');
 });
 
@@ -114,4 +117,47 @@ test('downloads the picture of the car with the portal session', async () => {
   // A portal path works too; plain http is refused.
   assert.deepEqual((await client.getVehicleImage(CAR_IMAGE_PATH)).body, CAR_PNG);
   await assert.rejects(client.getVehicleImage('http://example.com/car.png'), /https/);
+});
+
+test('the picture location is found in the shapes the portal uses', () => {
+  assert.equal(
+    findImageLocation({ imageLocation: 'https://cdn.example/a.png' }),
+    'https://cdn.example/a.png',
+  );
+  assert.equal(
+    findImageLocation({
+      images: [
+        { viewPosition: 'REAR', url: 'https://cdn.example/rear.png' },
+        { viewPosition: 'FRONT_LEFT', url: 'https://cdn.example/front_left.png' },
+      ],
+    }),
+    'https://cdn.example/front_left.png',
+  );
+  assert.equal(
+    findImageLocation({ relation: { vehicleImage: { uri: '/media/car.jpg' } } }),
+    '/media/car.jpg',
+  );
+  // A field that is not an image, or a value that is not a location, is ignored.
+  assert.equal(findImageLocation({ licensePlate: 'AB-123-CD', imageLocation: '' }), undefined);
+  assert.equal(findImageLocation({ image: 'front left' }), undefined);
+  assert.equal(findImageLocation(undefined), undefined);
+});
+
+test('the logged shape of an answer holds field names, never values', () => {
+  const shape = describeShape({
+    vin: VIN,
+    nickName: 'Ma ID.3',
+    relation: { role: 'PRIMARY_USER', images: [{ url: 'https://x' }] },
+    list: [],
+  });
+  assert.deepEqual(shape, ['vin', 'nickName', 'relation.role', 'relation.images[].url', 'list[]']);
+  assert.ok(!shape.join(' ').includes(VIN));
+});
+
+test('reads the relation of the account to a car', async () => {
+  const vw = createFakeVolkswagen({ relationImage: '/media/relation.png' });
+  const client = new VwClient({ ...credentials, fetch: vw.fetch });
+  const relation = await client.getVehicleRelation(VIN);
+  assert.equal(findImageLocation(relation), '/media/relation.png');
+  assert.equal(await client.getVehicleRelation('WVWZZZE1ZMP000000'), undefined);
 });

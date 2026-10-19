@@ -246,9 +246,22 @@ test('a picture unfit for a widget is left out, and retried an hour later', asyn
   assert.ok(await service.vehiclePicture(vehicle));
 });
 
-test('a car without picture on the portal has none', async () => {
+test('a car without picture on the portal has none, and the answers are looked up once', async () => {
   const vw = createFakeVolkswagen({ vehicles: [{ vin: VIN, nickName: 'Ma ID.3' }] });
   const { service } = await setup({ vw });
   assert.equal(await service.vehiclePicture(service.vehicles[0]), undefined);
+  assert.equal(await service.vehiclePicture(service.vehicles[0]), undefined);
   assert.equal(vw.count('.png'), 0);
+  assert.equal(vw.count('/relations/'), 1, 'not on every dashboard refresh');
+});
+
+test('without a picture in the vehicle list, the relation one is used', async () => {
+  const vw = createFakeVolkswagen({
+    vehicles: [{ vin: VIN, nickName: 'Ma ID.3' }],
+    relationImage: '/media/relation.png',
+  });
+  const { service } = await setup({ vw });
+  const picture = await service.vehiclePicture(service.vehicles[0]);
+  assert.ok(picture, 'found in the relation');
+  assert.equal(picture.base64, CAR_PNG.toString('base64'));
 });

@@ -13,6 +13,10 @@ the notes of the version's GitHub Release.
 ### Fixed
 
 - The widgets show the battery level with its "%" unit.
+- The picture widget looks for the car's picture in more places of the
+  portal answers (the vehicle list, then the car's relation to the account).
+  When none is found, the logs list the fields the portal sent — their names
+  only, never their values.
 
 ## [1.1.0] - 2026-10-19
 

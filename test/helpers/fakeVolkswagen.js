@@ -110,6 +110,7 @@ export function createFakeVolkswagen({
     },
   ],
   carImage = CAR_PNG,
+  relationImage,
   datasets = [
     {
       name: 'request_20261017T0800.zip',
@@ -130,6 +131,7 @@ export function createFakeVolkswagen({
     portalConsent,
     marketingConsent,
     carImage,
+    relationImage,
     requests: [],
     logins: 0,
     validSessions: new Set(),
@@ -249,7 +251,10 @@ export function createFakeVolkswagen({
       vw.validSessions.add(session);
       return redirect('/de/en/user.html', [`access_token=${session}; Path=/; Secure; HttpOnly`]);
     }
-    if (url.origin === PORTAL && url.pathname === CAR_IMAGE_PATH) {
+    if (
+      url.origin === PORTAL &&
+      (url.pathname === CAR_IMAGE_PATH || url.pathname === vw.relationImage)
+    ) {
       if (!vw.validSessions.has(cookies.match(/access_token=([^;]+)/)?.[1])) {
         return reply(401);
       }
@@ -267,6 +272,19 @@ export function createFakeVolkswagen({
       }
       if (url.pathname === '/proxy_api/consent/me/vehicles') {
         return reply(200, { body: vw.vehicles });
+      }
+      const relation = url.pathname.match(/^\/proxy_api\/vum\/v2\/users\/me\/relations\/([^/]+)$/);
+      if (relation) {
+        if (!vw.vehicles.some((v) => v.vin === relation[1])) return reply(404);
+        return reply(200, {
+          body: {
+            relation: {
+              vehicleNickname: 'Ma ID.3',
+              role: 'PRIMARY_USER',
+              ...(vw.relationImage ? { vehicleImage: { url: vw.relationImage } } : {}),
+            },
+          },
+        });
       }
       const match = url.pathname.match(/\/vehicles\/([^/]+)\//);
       if (!match || !vw.vehicles.some((v) => v.vin === match[1])) {

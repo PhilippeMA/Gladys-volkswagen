@@ -14,6 +14,7 @@
 // Volkswagen, never the network.
 // -----------------------------------------------------------------------------
 
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '@gladysassistant/integration-sdk';
 import { PORTAL_URL, VwAuthError, login } from './auth.js';
 import { httpsFetch } from './transport.js';
@@ -43,6 +44,55 @@ export class NoDataRequestError extends Error {
     super(`No data request configured on the EU Data Act portal for ${vin.slice(-6)}`);
     this.name = 'NoDataRequestError';
   }
+}
+
+// Where a portal answer may hold the picture of the car: the documented
+// `imageLocation`, else any field named like an image whose value is a
+// location (the portal shapes vary between accounts and models).
+const IMAGE_KEY = /image|picture|render/i;
+const IMAGE_LOCATION = /^(https:\/\/|\/)[^\s]+$/;
+
+/**
+ * The picture location in a portal answer, or undefined. Prefers
+ * `imageLocation`, then the front-left view when several are listed.
+ */
+export function findImageLocation(value, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 4) {
+    return undefined;
+  }
+  if (typeof value.imageLocation === 'string' && IMAGE_LOCATION.test(value.imageLocation)) {
+    return value.imageLocation;
+  }
+  const candidates = [];
+  const visit = (node, keyLooksLikeImage, level) => {
+    if (level > 4 || node === null || node === undefined) return;
+    if (typeof node === 'string') {
+      if (keyLooksLikeImage && IMAGE_LOCATION.test(node)) candidates.push(node);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    for (const [key, child] of Object.entries(node)) {
+      visit(child, keyLooksLikeImage || IMAGE_KEY.test(key) || key === 'url', level + 1);
+    }
+  };
+  visit(value, false, depth);
+  return candidates.find((url) => /front.?left/i.test(url)) ?? candidates[0];
+}
+
+/**
+ * The shape of a portal answer for the logs: its field paths, never their
+ * values (the answers carry the VIN, the plate, the owner...).
+ */
+export function describeShape(value, prefix = '', depth = 0) {
+  if (Array.isArray(value)) {
+    return value.length === 0 ? [`${prefix}[]`] : describeShape(value[0], `${prefix}[]`, depth);
+  }
+  if (!value || typeof value !== 'object' || depth > 3) {
+    return prefix ? [prefix] : [];
+  }
+  return Object.entries(value).flatMap(([key, child]) =>
+    describeShape(child, prefix ? `${prefix}.${key}` : key, depth + 1),
+  );
 }
 
 /** True when the portal reports an expired session (401/403, or its HTML error page). */
@@ -169,7 +219,9 @@ export class VwClient {
         vin,
         nickname: entry.nickName ?? entry.vehicleNickname ?? entry.nickname ?? undefined,
         model: entry.modelName ?? undefined,
-        image: typeof entry.imageLocation === 'string' ? entry.imageLocation : undefined,
+        image: findImageLocation(entry),
+        // Field paths only, for the log when no picture is found.
+        shape: describeShape(entry),
       });
     }
     return [...vehicles.values()];
@@ -189,6 +241,24 @@ export class VwClient {
       throw this.#fail('The vehicle picture', answer);
     }
     return { body: answer.body };
+  }
+
+  /**
+   * The relation of the account to a car (nickname, role...), where the
+   * portal may also keep the car's picture. Resolves the JSON, or undefined
+   * when the portal has none.
+   */
+  async getVehicleRelation(vin) {
+    const answer = await this.#get(
+      `/proxy_api/vum/v2/users/me/relations/${encodeURIComponent(vin)}`,
+      {
+        traceid: `vehicle-relation-fetch-${randomUUID()}`,
+      },
+    );
+    if (answer.status !== 200) {
+      return undefined;
+    }
+    return this.#json('The vehicle relation', answer);
   }
 
   /** Identifier of the car's continuous data request; NoDataRequestError if none. */
