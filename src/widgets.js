@@ -139,22 +139,28 @@ function noVehicleContent(service) {
   };
 }
 
-/** Battery gauge and range tile, bound to the device features (live). */
-function liveTiles(gladys, service, vehicle) {
+/**
+ * Battery gauge and range tile. The range is bound to its device feature
+ * (live). The gauge carries the battery level read by the integration: the
+ * core ignores the unit of a gauge bound to a feature, and the "%" must
+ * show. index.js nudges the widgets after every read, so it stays current.
+ * Before the first read (just after a restart), it falls back to the
+ * feature binding.
+ */
+function batteryGauge(gladys, service, vehicle) {
+  const label = text('Battery', 'Batterie');
+  const level = service.statusOf(vehicle.vin)?.batteryLevel;
+  if (level !== undefined) {
+    return [{ type: 'gauge', label, value: level, min: 0, max: 100, unit: '%' }];
+  }
   const battery = featureOf(gladys, service, vehicle, 'battery-level');
+  return battery ? [{ type: 'gauge', label, device_feature: battery, unit: '%' }] : [];
+}
+
+function liveTiles(gladys, service, vehicle) {
   const range = featureOf(gladys, service, vehicle, 'range');
   return [
-    ...(battery
-      ? [
-          // The core does not take the unit from the feature: give it here.
-          {
-            type: 'gauge',
-            label: text('Battery', 'Batterie'),
-            device_feature: battery,
-            unit: '%',
-          },
-        ]
-      : []),
+    ...batteryGauge(gladys, service, vehicle),
     ...(range
       ? [
           {

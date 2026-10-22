@@ -54,11 +54,22 @@ for (const widgetKey of [VEHICLE_STATUS_WIDGET, VEHICLE_PICTURE_WIDGET]) {
 
 test('both widgets show the battery level with its % unit', async () => {
   for (const widgetKey of [VEHICLE_STATUS_WIDGET, VEHICLE_PICTURE_WIDGET]) {
-    const { getContent } = await setup(sampleDataset(), { widgetKey });
+    const { getContent } = await setup(sampleDataset({ soc: 47 }), { widgetKey });
     const gauge = (await getContent()).components.find((c) => c.type === 'gauge');
-    assert.equal(gauge.unit, '%', widgetKey);
-    assert.match(gauge.device_feature, /:battery-level$/, 'still live');
+    // The core ignores the unit of a feature-bound gauge: the value is given.
+    assert.deepEqual(
+      { value: gauge.value, min: gauge.min, max: gauge.max, unit: gauge.unit },
+      { value: 47, min: 0, max: 100, unit: '%' },
+      widgetKey,
+    );
+    assert.equal(gauge.device_feature, undefined);
   }
+});
+
+test('before the first read, the gauge falls back to the feature binding', async () => {
+  const { getContent } = await setup(sampleDataset(), { read: false });
+  const gauge = (await getContent()).components.find((c) => c.type === 'gauge');
+  assert.match(gauge.device_feature, /:battery-level$/);
 });
 
 test('the picture widget shows the portal picture of the car, served by its key', async () => {
@@ -100,7 +111,7 @@ test('the tiles are bound to the published features, without controls', async ()
   );
   const content = await getContent();
   const bound = content.components.filter((c) => c.device_feature);
-  assert.equal(bound.length, 2, 'battery and range');
+  assert.equal(bound.length, 1, 'the range (the battery gauge carries its value)');
   for (const component of bound) {
     assert.ok(featureIds.has(component.device_feature), `unknown ${component.device_feature}`);
     assert.notEqual(component.type, 'button', 'the portal takes no command');

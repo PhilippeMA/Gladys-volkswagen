@@ -10,6 +10,12 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Fixed
+
+- The "%" of the battery level now really shows in the widgets: Gladys ignores
+  the unit of a gauge bound to a device feature, so the gauge carries the
+  value read by the integration.
+
 ## [1.2.0] - 2026-10-19
 
 ### Added
