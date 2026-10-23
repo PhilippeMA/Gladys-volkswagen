@@ -30,7 +30,13 @@ import {
   describeShape,
   findImageLocation,
 } from './vw/client.js';
-import { mergePoints, parseDataset, statusFromPoints } from './vw/status.js';
+import {
+  DATASET_SEQ_SPAN,
+  chargeFieldsOfNewestDataset,
+  mergePoints,
+  parseDataset,
+  statusFromPoints,
+} from './vw/status.js';
 
 const logger = createLogger({ name: 'vehicles' });
 
@@ -40,8 +46,6 @@ const STATE_HEARTBEAT_MS = 30 * 60 * 1000;
 // On the first read, merge this many of the newest datasets: a parked car
 // delivers few data points per dataset.
 const MAX_BACKFILL = 4;
-// Room left for the points of one dataset in the merge order (see parseDataset).
-const DATASET_SEQ_SPAN = 1_000_000;
 // A car picture that could not be fetched (or is too large for a widget) is
 // tried again after this delay, not on every dashboard refresh.
 const PICTURE_RETRY_MS = 60 * 60 * 1000;
@@ -361,7 +365,14 @@ export class VehicleService {
         lastCreatedOn = Math.max(lastCreatedOn, dataset.createdOn);
       }
       if (pending.length > 0) {
-        logger.debug(`${vehicleName(vehicle)}: ${pending.length} new dataset(s)`);
+        // One line per new dataset (every 15 minutes at best): what the car
+        // reported about its charge, to check against the Volkswagen app.
+        const newest = new Date(pending.at(-1).createdOn).toISOString();
+        const fields = chargeFieldsOfNewestDataset(points);
+        logger.info(
+          `${vehicleName(vehicle)}: ${pending.length} new dataset(s), newest ${newest}; ` +
+            `charge fields: ${fields.join(', ') || '(none)'}`,
+        );
       }
       return { identifier, points, lastCreatedOn, datasets };
     });

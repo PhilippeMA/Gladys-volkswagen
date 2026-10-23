@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergePoints, parseDataset, statusFromPoints } from '../src/vw/status.js';
+import {
+  chargeFieldsOfNewestDataset,
+  mergePoints,
+  parseDataset,
+  statusFromPoints,
+} from '../src/vw/status.js';
 import { sampleDataset } from './helpers/fakeVolkswagen.js';
 
 const statusOf = (...datasets) =>
@@ -89,4 +94,61 @@ test('an empty or malformed dataset gives an empty status', () => {
   assert.equal(status.batteryLevel, undefined);
   assert.equal(status.odometer, undefined);
   assert.equal(status.capturedAt, undefined);
+});
+
+test('a newer charge state wins over an older one held in another field', () => {
+  const older = sampleDataset({
+    chargeState: 'CHARGE_STATE_READY_FOR_CHARGING',
+    plug: 'disconnected',
+  });
+  const newer = {
+    Data: [
+      { dataFieldName: 'charging_state', value: 'charging' },
+      { dataFieldName: 'charging_power', value: '11' },
+    ],
+  };
+  const status = statusOf(older, newer);
+  assert.equal(status.chargingState, 'charging');
+  assert.equal(status.charging, true);
+  assert.equal(status.plugged, true, 'a car charging is plugged in');
+  assert.equal(status.chargePower, 11, 'the newest power field');
+});
+
+test('any charge field of the newest dataset saying "charging" wins', () => {
+  const status = statusOf({
+    Data: [
+      {
+        dataFieldName: 'charging_state_report.current_charge_state',
+        value: 'CHARGE_STATE_READY_FOR_CHARGING',
+      },
+      {
+        dataFieldName: 'charging_state_report.charging_scenario',
+        value: 'CHARGING_SCENARIO_IMMEDIATELY_CHARGING_ACTIVE',
+      },
+    ],
+  });
+  assert.equal(status.charging, true);
+});
+
+test('the dictionary spelling "charching" and the other plug field names', () => {
+  assert.equal(
+    statusOf({ Data: [{ dataFieldName: 'charging_state', value: 'charching' }] }).charging,
+    true,
+  );
+  const plugged = (name, value) => statusOf({ Data: [{ dataFieldName: name, value }] }).plugged;
+  assert.equal(plugged('plug_states.0.plug_connection_state', 'connected'), true);
+  assert.equal(plugged('Plug Connection State', 'CONNECTED'), true);
+  assert.equal(
+    plugged('plug_states.1.plug_connection_state', 'PLUG_CONNECTION_STATE_DISCONNECTED'),
+    false,
+  );
+  assert.equal(plugged('plug_state', 'invalid'), undefined);
+});
+
+test('the charge fields of the newest dataset are listed for the logs', () => {
+  const points = mergePoints(
+    parseDataset(sampleDataset({ chargeState: 'CHARGE_STATE_CHARGING_HV_BATTERY' }), 1e6),
+    parseDataset({ Data: [{ dataFieldName: 'charging_state', value: 'charging' }] }, 2e6),
+  );
+  assert.deepEqual(chargeFieldsOfNewestDataset(points), ['charging_state=charging']);
 });

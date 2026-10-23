@@ -10,6 +10,18 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Charging, charging power and cable plugged followed an old dataset: the
+  charge state is now read from the newest dataset holding one, a car
+  charging counts as plugged in, and the other names the portal gives these
+  fields are read too.
+
+### Added
+
+- One log line per new dataset with the charge fields the car sent, to check
+  them against the Volkswagen app.
+
 ## [1.2.1] - 2026-10-22
 
 ### Fixed

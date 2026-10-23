@@ -94,6 +94,8 @@ const CHARGE_STATE_BY_LABEL = Object.fromEntries(CHARGE_STATES);
 // The flat `charging_state` field.
 const FLAT_CHARGING_STATES = {
   charging: 'charging',
+  // Spelled so in Volkswagen's data dictionary.
+  charching: 'charging',
   completed: 'chargePurposeReachedAndNotConservationCharging',
   conservationcharging: 'conservation',
   off: 'off',
@@ -117,6 +119,17 @@ function isSentinel(value, name) {
   return SENTINELS.has(number) || (number === -1 && /remaining_charging_time/.test(name));
 }
 
+/** Some datasets use display names ("Plug Connection State"): snake_case them. */
+function normalizeName(name) {
+  const text = typeof name === 'string' ? name.trim() : '';
+  return /\s/.test(text) ? text.toLowerCase().replace(/\s+/g, '_') : text;
+}
+
+// Room left for the points of one dataset in the merge order: the `base`
+// vehicles.js passes for a dataset is a multiple of it.
+export const DATASET_SEQ_SPAN = 1_000_000;
+const datasetOf = (point) => Math.floor(point.seq / DATASET_SEQ_SPAN);
+
 /**
  * The data points of one dataset, keyed by data point (`key`, else name):
  * `Map<id, { name, value, timestamp, seq }>`. `seq` orders the points of
@@ -130,7 +143,7 @@ export function parseDataset(dataset, base = 0) {
       return;
     }
     const value = String(item.value).trim();
-    let name = KNOWN_KEYS[item.key] ?? item.dataFieldName ?? '';
+    let name = KNOWN_KEYS[item.key] ?? normalizeName(item.dataFieldName);
     name = FIELD_ALIASES[name] ?? name;
     const id = item.key || name;
     if (!id || value === '' || isSentinel(value, name)) {
@@ -193,29 +206,71 @@ function boolean(value) {
   return undefined;
 }
 
-function chargingState(points) {
-  const current = lookup(points, 'charging_state_report.current_charge_state');
-  if (current !== undefined) {
-    const label = /^\d+$/.test(current) ? CHARGE_STATES[Number(current)]?.[0] : current;
-    const state = CHARGE_STATE_BY_LABEL[label?.toUpperCase()];
-    if (state) return state;
+/**
+ * The points of the given fields that came with the newest dataset holding
+ * any of them. A field absent from the newer datasets keeps an old value:
+ * the charge fields must be read together, from the same dataset, or an old
+ * "ready for charging" would hide a newer "charging".
+ */
+function newestTogether(points, matches) {
+  const found = [...points.values()].filter((point) => matches(point.name));
+  if (found.length === 0) return [];
+  const newest = Math.max(...found.map(datasetOf));
+  return found.filter((point) => datasetOf(point) === newest).sort((a, b) => b.seq - a.seq);
+}
+
+const CHARGE_FIELDS = new Set([
+  'charging_state_report.current_charge_state',
+  'charging_state',
+  'charging_state_report.charging_scenario',
+]);
+
+function chargeStateOf({ name, value }) {
+  if (name === 'charging_state_report.current_charge_state') {
+    const label = /^\d+$/.test(value) ? CHARGE_STATES[Number(value)]?.[0] : value;
+    return CHARGE_STATE_BY_LABEL[label?.toUpperCase()];
   }
-  const flat = lookup(points, 'charging_state');
-  if (flat && FLAT_CHARGING_STATES[flat.toLowerCase()]) {
-    return FLAT_CHARGING_STATES[flat.toLowerCase()];
+  if (name === 'charging_state') {
+    return FLAT_CHARGING_STATES[value.toLowerCase()];
   }
-  const scenario = lookup(points, 'charging_state_report.charging_scenario')?.toUpperCase();
-  if (scenario?.endsWith('_ACTIVE')) return 'charging';
-  if (scenario?.endsWith('_FINISHED')) return 'chargePurposeReachedAndNotConservationCharging';
+  const scenario = value.toUpperCase();
+  if (scenario.endsWith('_ACTIVE')) return 'charging';
+  if (scenario.endsWith('_FINISHED')) return 'chargePurposeReachedAndNotConservationCharging';
   return undefined;
 }
 
+function chargingState(points) {
+  const states = newestTogether(points, (name) => CHARGE_FIELDS.has(name))
+    .map(chargeStateOf)
+    .filter(Boolean);
+  // Any field of that dataset saying "charging" wins (evcc reads them so).
+  return states.includes('charging') ? 'charging' : states[0];
+}
+
+const PLUG_FIELD = /^(plug_state|plug_connection_state|plug_states\.\d+\.plug_connection_state)$/;
+
 function plugged(points) {
-  const value = lookup(points, 'plug_state', 'plug_connection_state');
-  if (value === undefined) return undefined;
-  if (/disconnected/i.test(value)) return false;
-  if (/connected/i.test(value)) return true;
+  const values = newestTogether(points, (name) => PLUG_FIELD.test(name)).map((p) => p.value);
+  if (values.some((value) => /(^|_)connected$/i.test(value) && !/disconnected/i.test(value))) {
+    return true;
+  }
+  if (values.some((value) => /disconnected/i.test(value))) return false;
   return undefined;
+}
+
+/**
+ * The charge and plug fields of the newest dataset, as "name=value", for the
+ * logs: what the car really sent when the charge does not show. Car states
+ * only (no identifier matches these names).
+ */
+export function chargeFieldsOfNewestDataset(points) {
+  const all = [...points.values()];
+  if (all.length === 0) return [];
+  const newest = Math.max(...all.map(datasetOf));
+  return all
+    .filter((point) => datasetOf(point) === newest && /charg|plug/i.test(point.name))
+    .slice(0, 30)
+    .map((point) => `${point.name}=${String(point.value).slice(0, 60)}`);
 }
 
 /** Minutes left: `remaining_charging_time` (minutes) or a duration like "1800s". */
@@ -254,6 +309,7 @@ function anyOpen(points, pattern) {
  */
 export function statusFromPoints(points) {
   const state = chargingState(points);
+  const charging = state === undefined ? undefined : state === 'charging';
   const odometer = Math.max(
     ...[lookup(points, 'mileage.value'), lookup(points, 'mileage')]
       .map(number)
@@ -275,12 +331,13 @@ export function statusFromPoints(points) {
     ),
     range: number(lookup(points, 'cruising_range_combined', 'cruising_range_primary_engine')),
     chargingState: state,
-    charging: state === undefined ? undefined : state === 'charging',
+    charging,
     chargeComplete: state === undefined ? undefined : CHARGE_COMPLETE_STATES.has(state),
     chargePower: number(lookup(points, 'battery_state_report.charge_power', 'charging_power')),
     remainingChargingTime: remainingChargingTime(points),
     targetBatteryLevel: number(lookup(points, 'settings.target_soc')),
-    plugged: plugged(points),
+    // A car charging is plugged in, whatever an older plug value says.
+    plugged: charging ? true : plugged(points),
     outsideTemperature: outsideTemperature(points),
     odometer: Number.isFinite(odometer) ? odometer : undefined,
     locked: boolean(lookup(points, 'locked')),

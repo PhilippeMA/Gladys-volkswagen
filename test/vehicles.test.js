@@ -296,3 +296,38 @@ test('a configured picture unfit for a widget is reported', async () => {
   assert.equal(await service.vehiclePicture(service.vehicles[0]), undefined);
   assert.equal(service.configuredPictureFailed(service.vehicles[0]), true);
 });
+
+test('a charge reported by a newer dataset updates charging, power and plug', async () => {
+  const { vw, gladys, service, device, feature, clock } = await setup({
+    vw: createFakeVolkswagen({
+      datasets: [
+        {
+          name: 'a.zip',
+          createdOn: '2026-10-23T08:00:00Z',
+          content: sampleDataset({
+            chargeState: 'CHARGE_STATE_READY_FOR_CHARGING',
+            plug: 'disconnected',
+          }),
+        },
+      ],
+    }),
+  });
+  await service.poll(device);
+  assert.equal(gladys.fake.lastState(feature('charging').external_id), 0);
+  assert.equal(gladys.fake.lastState(feature('plugged').external_id), 0);
+
+  vw.deliver(
+    {
+      Data: [
+        { dataFieldName: 'charging_state', value: 'charging' },
+        { dataFieldName: 'charging_power', value: '7' },
+      ],
+    },
+    '2026-10-23T08:15:00Z',
+  );
+  clock.now += 300_000;
+  await service.poll(device);
+  assert.equal(gladys.fake.lastState(feature('charging').external_id), 1);
+  assert.equal(gladys.fake.lastState(feature('plugged').external_id), 1);
+  assert.equal(gladys.fake.lastState(feature('charge-power').external_id), 7);
+});
