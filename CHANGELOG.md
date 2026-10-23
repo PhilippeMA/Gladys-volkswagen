@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-23
+
 ### Fixed
 
 - Charging, charging power and cable plugged followed an old dataset: the
@@ -79,7 +81,8 @@ the notes of the version's GitHub Release.
 - A failed sign-in, a missing portal setup or an unreachable Volkswagen shows
   in the Configuration screen; saving the configuration again retries.
 
-[Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.1.0...v1.1.1
