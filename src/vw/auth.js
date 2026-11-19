@@ -4,7 +4,7 @@
 // Volkswagen retired the OAuth client of the ID. app API on 2026-06-01 (its
 // sign-in now answers HTTP 403). What remains open to third parties is the
 // portal Volkswagen runs for the EU Data Act
-// (https://eu-data-act.drivesomethinggreater.com): read-only datasets of the
+// (https://eu-data-act.vwgroup-datahub.com): read-only datasets of the
 // car, delivered every 15 minutes, with the same account as the Volkswagen
 // app. This flow follows the open-source ioBroker.vw-connect and evcc
 // clients:
@@ -23,13 +23,22 @@ import { randomBytes } from 'node:crypto';
 import { WebSession, hostOf } from './http.js';
 import { httpsFetch } from './transport.js';
 
-export const PORTAL_URL = 'https://eu-data-act.drivesomethinggreater.com';
+// Volkswagen moved the portal from eu-data-act.drivesomethinggreater.com in
+// November 2026: the old host answers every API call with a 301 to a path
+// that does not exist. Every request goes to the new host; the sign-in
+// redirects may still pass through the old one during the migration, so the
+// landing checks accept both (as ioBroker.vw-connect and evcc do).
+export const PORTAL_URL = 'https://eu-data-act.vwgroup-datahub.com';
+const LEGACY_PORTAL_URL = 'https://eu-data-act.drivesomethinggreater.com';
+const PORTAL_ORIGINS = new Set([PORTAL_URL, LEGACY_PORTAL_URL]);
 export const IDENTITY_URL = 'https://identity.vwgroup.io';
 
 // OpenID client of the portal for Volkswagen passenger cars (the ID. range).
 export const CLIENT_ID = '9b58543e-1c15-4193-91d5-8a14145bebb0@apps_vw-dilab_com';
 const BRAND = 'VOLKSWAGEN_PASSENGER_CARS';
 const AUTHORIZE_URL = `${IDENTITY_URL}/oidc/v1/authorize`;
+// Must be the new host: the authorization code is bound to it, and the old
+// host's 301 breaks the portal's code exchange.
 const REDIRECT_URI = `${PORTAL_URL}/login`;
 const SCOPE = 'openid cars profile';
 
@@ -170,11 +179,16 @@ export function parseTemplateModel(html) {
 
 // --- Landing pages ------------------------------------------------------------
 
+/** True for an https URL on the portal, new or old host. */
+export function isPortalUrl(url) {
+  return PORTAL_ORIGINS.has(new URL(url).origin);
+}
+
 /** The portal page the sign-in ends on (`/<country>/<language>/user.html`). */
 export function isPortalLandingPage(url) {
   const target = new URL(url);
   return (
-    target.origin === PORTAL_URL &&
+    isPortalUrl(target) &&
     /^\/(?:content\/euda\/)?[a-z]{2}\/[a-z]{2}\/user\.html$/.test(target.pathname)
   );
 }
@@ -315,13 +329,14 @@ export async function login({ email, password, fetch: fetchImpl = httpsFetch, lo
   });
 
   const end = new URL(landing.stoppedAt ?? landing.url);
-  if (end.origin !== PORTAL_URL) {
+  if (!isPortalUrl(end)) {
     const html = landing.stoppedAt ? '' : await landing.response.text();
     throw failureFrom(end.toString(), html);
   }
   if (!landing.stoppedAt && landing.response.status >= 400) {
     throw new Error(`The Volkswagen portal refused the sign-in (HTTP ${landing.response.status})`);
   }
+  // The cookie must be valid on the new host: every API call goes there.
   if (!web.jar.value('access_token', `${PORTAL_URL}/proxy_api/`)) {
     throw new VwAuthError('no portal session', MESSAGES.portalConsent);
   }

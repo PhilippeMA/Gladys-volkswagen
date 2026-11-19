@@ -331,3 +331,20 @@ test('a charge reported by a newer dataset updates charging, power and plug', as
   assert.equal(gladys.fake.lastState(feature('plugged').external_id), 1);
   assert.equal(gladys.fake.lastState(feature('charge-power').external_id), 7);
 });
+
+test('a portal that stops listing datasets is reported, not silently frozen', async () => {
+  const { vw, gladys, service, device, clock } = await setup();
+  await service.poll(device);
+  vw.datasets = [];
+  clock.now += 300_000;
+  await assert.rejects(service.poll(device), /No data request/);
+  assert.equal(gladys.fake.connectionStatus.connected, false);
+  assert.match(gladys.fake.connectionStatus.message.en, /continuous data request/);
+
+  // A new data request: the identifier is read again, the data flows again.
+  vw.deliver(sampleDataset({ soc: 70 }), '2026-11-19T08:00:00Z');
+  clock.now += 300_000;
+  await service.poll(device);
+  assert.equal(vw.count('/metadata/partial'), 2);
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+});

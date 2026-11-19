@@ -29,7 +29,7 @@ test('lists the cars linked to the portal, signing in once', async () => {
   assert.equal(vehicle.vin, VIN);
   assert.equal(vehicle.nickname, 'Ma ID.3');
   assert.equal(vehicle.model, 'ID.3');
-  assert.equal(vehicle.image, `https://eu-data-act.drivesomethinggreater.com${CAR_IMAGE_PATH}`);
+  assert.equal(vehicle.image, `https://eu-data-act.vwgroup-datahub.com${CAR_IMAGE_PATH}`);
   assert.equal(vw.logins, 1, 'concurrent calls share one sign-in');
 });
 
@@ -160,4 +160,14 @@ test('reads the relation of the account to a car', async () => {
   const relation = await client.getVehicleRelation(VIN);
   assert.equal(findImageLocation(relation), '/media/relation.png');
   assert.equal(await client.getVehicleRelation('WVWZZZE1ZMP000000'), undefined);
+});
+
+test('a portal that moves again is named in the error', async () => {
+  const vw = createFakeVolkswagen();
+  vw.listMovedTo = 'https://eu-data-act.example-next.com/proxy_api/list';
+  const client = new VwClient({ ...credentials, fetch: vw.fetch });
+  await assert.rejects(client.listDatasets(VIN, 'req-1'), (err) => {
+    assert.match(err.message, /HTTP 301: moved to eu-data-act\.example-next\.com/);
+    return true;
+  });
 });

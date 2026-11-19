@@ -34,7 +34,7 @@ Une donnée que la voiture n'a pas encore transmise n'apparaît pas.
 
 ## Étape 1 : activer le portail EU Data Act (une seule fois, dans un navigateur)
 
-1. Ouvrez <https://eu-data-act.drivesomethinggreater.com/> et connectez-vous
+1. Ouvrez <https://eu-data-act.vwgroup-datahub.com/> et connectez-vous
    avec le compte de l'application Volkswagen. Acceptez les conditions si le
    portail vous les présente.
 2. Allez dans **Data clusters → Vehicle overview**. Si votre voiture n'est

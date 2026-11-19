@@ -17,6 +17,7 @@
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '@gladysassistant/integration-sdk';
 import { PORTAL_URL, VwAuthError, login } from './auth.js';
+import { hostOf } from './http.js';
 import { httpsFetch } from './transport.js';
 import { readJsonFromZip } from './zip.js';
 
@@ -177,14 +178,20 @@ export class VwClient {
       return { status: response.status, body, text: body.subarray(0, 1).toString() };
     }
     const text = await response.text();
-    return { status: response.status, body: text, text };
+    const location = response.headers.get('location') ?? undefined;
+    return { status: response.status, body: text, text, location };
   }
 
-  #fail(what, { status, text }) {
-    return new VwApiError(
-      `${what} answered HTTP ${status}${text ? `: ${text.replace(/\s+/g, ' ').slice(0, 160)}` : ''}`,
-      status,
-    );
+  #fail(what, { status, text, location }) {
+    // A redirect means Volkswagen moved the portal again: name the new place,
+    // that is what the next fix needs.
+    const detail =
+      status >= 300 && status < 400 && location
+        ? `: moved to ${hostOf(location)}`
+        : text
+          ? `: ${text.replace(/\s+/g, ' ').slice(0, 160)}`
+          : '';
+    return new VwApiError(`${what} answered HTTP ${status}${detail}`, status);
   }
 
   #json(what, answer) {

@@ -355,6 +355,13 @@ export class VehicleService {
     const updated = await this.#withAccount(async (client) => {
       const identifier = known.identifier ?? (await client.getDataRequest(vehicle.vin));
       const list = await client.listDatasets(vehicle.vin, identifier);
+      if (list.length === 0 && known.datasets > 0) {
+        // It delivered before: the data request ended or was replaced. Say
+        // so instead of silently keeping old values, and read the request
+        // again at the next poll (a new one has a new identifier).
+        this.data.set(vehicle.vin, { ...known, identifier: undefined });
+        throw new NoDataRequestError(vehicle.vin);
+      }
       const fresh = list.filter((dataset) => dataset.createdOn > known.lastCreatedOn);
       const pending = known.datasets === 0 ? fresh.slice(-MAX_BACKFILL) : fresh;
       let { points, lastCreatedOn, datasets } = known;

@@ -10,6 +10,16 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Follow Volkswagen's move of the EU Data Act portal to
+  eu-data-act.vwgroup-datahub.com: the old host answered the dataset list with
+  a 301 and stopped resolving ("getaddrinfo EAI_AGAIN").
+- A portal that stops listing datasets after delivering some is reported in
+  the Configuration screen instead of silently freezing the values, and the
+  data request is read again at the next check.
+- A portal answer that redirects elsewhere now names the new host in the error.
+
 ## [1.2.2] - 2026-10-23
 
 ### Fixed

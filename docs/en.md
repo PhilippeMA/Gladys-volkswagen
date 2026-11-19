@@ -34,7 +34,7 @@ A value the car has not sent yet is left out.
 
 ## Step 1: enable the EU Data Act portal (once, in a browser)
 
-1. Open <https://eu-data-act.drivesomethinggreater.com/> and sign in with the
+1. Open <https://eu-data-act.vwgroup-datahub.com/> and sign in with the
    account of the Volkswagen app. Accept the terms if the portal shows them.
 2. Go to **Data clusters → Vehicle overview**. If your car is not listed,
    click **Connect your car** and follow the steps.

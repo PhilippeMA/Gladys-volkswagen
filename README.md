@@ -24,7 +24,7 @@ User documentation: [English](docs/en.md) · [Français](docs/fr.md).
 > **Read-only, by necessity.** Volkswagen retired the OAuth client of the ID.
 > app API on 2026-06-01: its sign-in now answers HTTP 403 to every
 > third-party client. The only data source left open is the
-> [EU Data Act portal](https://eu-data-act.drivesomethinggreater.com), which
+> [EU Data Act portal](https://eu-data-act.vwgroup-datahub.com), which
 > stores a dataset of the car every 15 minutes and takes no command. The flow
 > follows the open-source
 > [ioBroker.vw-connect](https://github.com/TA2k/ioBroker.vw-connect) and

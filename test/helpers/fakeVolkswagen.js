@@ -12,7 +12,9 @@ import zlib from 'node:zlib';
 export const VIN = 'WVWZZZE1ZMP012345';
 const CLIENT = '9b58543e-1c15-4193-91d5-8a14145bebb0@apps_vw-dilab_com';
 const IDENTITY = 'https://identity.vwgroup.io';
-const PORTAL = 'https://eu-data-act.drivesomethinggreater.com';
+const PORTAL = 'https://eu-data-act.vwgroup-datahub.com';
+// The host Volkswagen left in November 2026: it 301s everything to the new one.
+const LEGACY_PORTAL = 'https://eu-data-act.drivesomethinggreater.com';
 
 /** A dataset of the portal, as its JSON document. */
 export function sampleDataset({
@@ -111,6 +113,7 @@ export function createFakeVolkswagen({
   ],
   carImage = CAR_PNG,
   relationImage,
+  legacyLanding = false,
   datasets = [
     {
       name: 'request_20261017T0800.zip',
@@ -132,6 +135,8 @@ export function createFakeVolkswagen({
     marketingConsent,
     carImage,
     relationImage,
+    legacyLanding,
+    listMovedTo: undefined,
     requests: [],
     logins: 0,
     validSessions: new Set(),
@@ -239,6 +244,9 @@ export function createFakeVolkswagen({
     }
 
     // --- Portal ------------------------------------------------------------
+    if (url.origin === LEGACY_PORTAL) {
+      throw new Error('the old portal host must not be requested any more');
+    }
     if (url.origin === PORTAL && url.pathname === '/login') {
       if (url.searchParams.get('code') !== 'auth-code') {
         return reply(400);
@@ -249,7 +257,9 @@ export function createFakeVolkswagen({
       vw.logins += 1;
       const session = `session-${vw.logins}`;
       vw.validSessions.add(session);
-      return redirect('/de/en/user.html', [`access_token=${session}; Path=/; Secure; HttpOnly`]);
+      // During the migration the landing page may still be on the old host.
+      const landing = vw.legacyLanding ? `${LEGACY_PORTAL}/de/en/user.html` : '/de/en/user.html';
+      return redirect(landing, [`access_token=${session}; Path=/; Secure; HttpOnly`]);
     }
     if (
       url.origin === PORTAL &&
@@ -294,6 +304,7 @@ export function createFakeVolkswagen({
         return vw.dataRequest ? reply(200, { body: { Identifier: 'req-1' } }) : reply(404);
       }
       if (url.pathname.endsWith('/req-1/list')) {
+        if (vw.listMovedTo) return reply(301, { headers: { location: vw.listMovedTo } });
         if (headers.get('type') !== 'partial') return reply(400);
         if (vw.datasets.length === 0) return reply(404, { body: 'No files available' });
         return reply(200, {

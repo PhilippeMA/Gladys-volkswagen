@@ -14,7 +14,7 @@ import { CookieJar } from '../src/vw/http.js';
 import { createFakeVolkswagen } from './helpers/fakeVolkswagen.js';
 
 const credentials = { email: 'driver@example.com', password: 'secret-password' };
-const PORTAL_API = 'https://eu-data-act.drivesomethinggreater.com/proxy_api/';
+const PORTAL_API = 'https://eu-data-act.vwgroup-datahub.com/proxy_api/';
 
 test('signs in to the portal and keeps its session cookie', async () => {
   const vw = createFakeVolkswagen();
@@ -86,7 +86,7 @@ test('form and script parsing', () => {
 });
 
 test('landing page and marketing callback detection', () => {
-  const portal = 'https://eu-data-act.drivesomethinggreater.com';
+  const portal = 'https://eu-data-act.vwgroup-datahub.com';
   assert.equal(isPortalLandingPage(`${portal}/de/en/user.html`), true);
   assert.equal(isPortalLandingPage(`${portal}/content/euda/fr/fr/user.html`), true);
   assert.equal(isPortalLandingPage(`${portal}/login`), false);
@@ -115,4 +115,21 @@ test('the cookie jar honors domains and expiries', () => {
   expire.append('set-cookie', 'a=; Max-Age=0');
   jar.store('https://identity.vwgroup.io/x', { headers: expire });
   assert.equal(jar.header('https://identity.vwgroup.io/y'), 'b=2');
+});
+
+test('signs in on the new portal host, even when the landing passes by the old one', async () => {
+  const vw = createFakeVolkswagen({ legacyLanding: true });
+  const session = await login({ ...credentials, fetch: vw.fetch });
+  assert.equal(session.jar.value('access_token', PORTAL_API), 'session-1');
+  const authorize = new URL(`https://identity.vwgroup.io${vw.requests[0].path}`);
+  assert.equal(
+    authorize.searchParams.get('redirect_uri'),
+    'https://eu-data-act.vwgroup-datahub.com/login',
+    'the code is bound to the new host',
+  );
+  assert.equal(
+    isPortalLandingPage('https://eu-data-act.drivesomethinggreater.com/de/en/user.html'),
+    true,
+  );
+  assert.equal(isPortalLandingPage('https://eu-data-act.example.org/de/en/user.html'), false);
 });
