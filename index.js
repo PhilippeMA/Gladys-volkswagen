@@ -51,8 +51,9 @@ gladys.onScanRequest(async () => {
 // command (the SDK answers "not implemented" to a stray one).
 
 // --- Polling: Gladys asks to refresh a vehicle -------------------------------
-// Gladys polls every vehicle once a minute; the service only checks the
-// portal at the interval the user chose in the configuration.
+// Gladys polls every vehicle (published with a `poll_frequency`) once a
+// minute; the service only checks the portal at the interval the user chose
+// in the configuration.
 gladys.onPoll(async (device) => {
   if (!(await service.poll(device))) {
     logger.debug(`onPoll skipped (not due) for ${device.external_id}`);

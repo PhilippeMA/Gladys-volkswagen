@@ -42,6 +42,22 @@ test('one read-only device per car, keyed on the VIN, that Gladys accepts', asyn
   assert.equal(gladys.fake.discoveredDevices.length, 1);
 });
 
+test('every feature carries the columns Gladys needs to create it', async () => {
+  // Gladys stores them NOT NULL: a missing one fails the "Add" of the
+  // Discovery tab with an HTTP 422. The SDK fake (0.16.1+) refuses it on
+  // publication; this names the faulty feature and checks min <= max.
+  const { device } = await setup();
+  for (const feature of device.features) {
+    const where = feature.name ?? feature.external_id;
+    assert.ok(typeof feature.name === 'string' && feature.name.length > 0, `${where}: name`);
+    assert.ok(Number.isFinite(feature.min), `${where}: min`);
+    assert.ok(Number.isFinite(feature.max), `${where}: max`);
+    assert.ok(feature.min <= feature.max, `${where}: min must not exceed max`);
+    assert.equal(typeof feature.read_only, 'boolean', `${where}: read_only`);
+    assert.equal(typeof feature.has_feedback, 'boolean', `${where}: has_feedback`);
+  }
+});
+
 test('a poll publishes the dataset, then waits for the configured interval', async () => {
   const { vw, gladys, service, device, feature, clock } = await setup();
   assert.equal(await service.poll(device), true);

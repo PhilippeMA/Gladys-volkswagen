@@ -20,6 +20,12 @@ the notes of the version's GitHub Release.
   data request is read again at the next check.
 - A portal answer that redirects elsewhere now names the new host in the error.
 
+### Changed
+
+- Integration SDK 0.16.1, following the official template: its test Gladys
+  refuses a device feature missing a column Gladys needs to create it, and a
+  test now checks every feature of the vehicle device.
+
 ## [1.2.2] - 2026-10-23
 
 ### Fixed

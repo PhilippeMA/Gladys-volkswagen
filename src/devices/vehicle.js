@@ -171,7 +171,9 @@ export function buildVehicleDevice(gladys, vehicle) {
     external_id: ids.device,
     model: typeof vehicle.model === 'string' ? vehicle.model : undefined,
     // Gladys polls once a minute at most; src/devices/index.js applies the
-    // slower refresh interval of the configuration by skipping polls.
+    // slower refresh interval of the configuration by skipping polls. A
+    // recent core polls a device published with a `poll_frequency` by itself;
+    // `should_poll` stays explicit for the older cores, which need both.
     should_poll: true,
     poll_frequency: DEVICE_POLL_FREQUENCIES.EVERY_MINUTES,
     features: FEATURES.map((feature) => ({
@@ -180,6 +182,9 @@ export function buildVehicleDevice(gladys, vehicle) {
       category: feature.category,
       type: feature.type,
       ...(feature.unit ? { unit: feature.unit } : {}),
+      // `name`, `min`, `max`, `read_only` and `has_feedback` are mandatory on
+      // every feature: Gladys stores them NOT NULL, and a missing one fails
+      // the "Add" of the Discovery tab (HTTP 422).
       min: feature.min,
       max: feature.max,
       read_only: true,
