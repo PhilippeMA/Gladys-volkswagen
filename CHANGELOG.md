@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-19
+
 ### Fixed
 
 - Follow Volkswagen's move of the EU Data Act portal to
@@ -97,7 +99,8 @@ the notes of the version's GitHub Release.
 - A failed sign-in, a missing portal setup or an unreachable Volkswagen shows
   in the Configuration screen; saving the configuration again retries.
 
-[Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/PhilippeMA/Gladys-volkswagen/compare/v1.1.1...v1.2.0
