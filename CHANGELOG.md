@@ -10,6 +10,11 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Changed
+
+- Declared `transports: ["cloud"]` (the EU Data Act portal of Volkswagen): the
+  Cloud filter of the Gladys catalog now finds the integration.
+
 ## [1.3.0] - 2026-11-19
 
 ### Fixed
